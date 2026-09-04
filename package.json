@@ -1,1 +1,18 @@
-
+{
+  "name": "kinglua",
+  "version": "1.0.0",
+  "description": "KingLua Protection System",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js & node bot.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "express-session": "^1.17.3",
+    "axios": "^1.6.2",
+    "discord.js": "^14.14.1"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
