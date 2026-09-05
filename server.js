@@ -260,6 +260,17 @@ app.get("/api/scripts/internal", requireInternalSecret, (req, res) => {
   );
 });
 
+// Endpoint baru: ambil script by scriptId (untuk lookup owner saat whitelist)
+app.get("/api/scripts/internal/:id", requireInternalSecret, (req, res) => {
+  const db = readDB();
+  const script = db.find((s) => s.id === req.params.id);
+  if (!script) return res.status(404).json({ error: "Script not found" });
+  res.json({
+    id: script.id, name: script.name, enabled: script.enabled,
+    ownerId: script.ownerId, ownerUsername: script.ownerUsername, guildId: script.guildId,
+  });
+});
+
 app.post("/api/scripts", requireAuth, (req, res) => {
   const { name, source, guildId } = req.body;
   if (!name || typeof name !== "string") return res.status(400).json({ error: "Script name is required" });
