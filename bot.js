@@ -368,8 +368,11 @@ client.on("interactionCreate", async interaction => {
             return interaction.editReply({ content: "❌ You don't have a key for this script!" }).catch(() => {});
           }
 
-          const loaderCode = `loadstring(game:HttpGet("${CONFIG.apiBase}/api/loader/${validKey.scriptId}.lua"))()`;
-          return interaction.editReply({ content: `\`\`\`lua\n${loaderCode}\n\`\`\`` }).catch(() => {});
+          const loaderPage = `${CONFIG.apiBase}/api/loader/${validKey.scriptId}.lua?uid=${interaction.user.id}`;
+          const loaderCode = `local script_key = "${validKey.key}"\nloadstring(game:HttpGet("${CONFIG.apiBase}/api/loader/${validKey.scriptId}.lua"))()`;
+          return interaction.editReply({
+            content: `\`\`\`lua\n${loaderCode}\n\`\`\`\n🔗 **Loader Page:** ${loaderPage}`
+          }).catch(() => {});
         } catch (err) {
           console.error("Get script error:", err);
           return interaction.editReply({ content: "❌ Failed to get script. Please try again." }).catch(() => {});
@@ -741,8 +744,9 @@ client.on("interactionCreate", async interaction => {
             }
 
             const channelTag = panelChannelId ? `<#${panelChannelId}>` : `<#${interaction.channelId}>`;
+            const loaderPage = `${CONFIG.apiBase}/api/loader/${scriptId}.lua?uid=${targetId}`;
             return interaction.editReply({
-              content: `<@${targetId}> You have been whitelisted for **${owned.name}**!\nYou can access the script via this message --> ${channelTag}`
+              content: `<@${targetId}> You have been whitelisted for **${owned.name}**!\nYou can access the script via this message --> ${channelTag}\n🔑 **Your key page:** ${loaderPage}`
             }).catch(() => {});
           }
 
@@ -1085,8 +1089,9 @@ client.on("interactionCreate", async interaction => {
               }
 
               const channelTag = panelChannelId ? `<#${panelChannelId}>` : `<#${interaction.channelId}>`;
+              const loaderPage = `${CONFIG.apiBase}/api/loader/${scriptId}.lua?uid=${targetUser.id}`;
               return interaction.editReply({
-                content: `<@${targetUser.id}> You have been whitelisted for **${myScripts[0].name}**!\nYou can access the script via this message --> ${channelTag}`
+                content: `<@${targetUser.id}> You have been whitelisted for **${myScripts[0].name}**!\nYou can access the script via this message --> ${channelTag}\n🔑 **Your key page:** ${loaderPage}`
               }).catch(() => {});
             }
 
