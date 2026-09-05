@@ -28,7 +28,7 @@ app.use(express.json({ limit: "15mb" }));
 
 app.use(
   session({
-    secret: process.env.SESSION_SECRET || "kingmor-secret-key-ganti-ini",
+    secret: process.env.SESSION_SECRET || "kingmor-secret-key-change-this",
     resave: false,
     saveUninitialized: false,
     cookie: {
@@ -39,13 +39,13 @@ app.use(
 );
 
 const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID || "1545625902585487370";
-const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET || "GANTI_DENGAN_CLIENT_SECRET";
+const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET || "REPLACE_WITH_CLIENT_SECRET";
 const DISCORD_REDIRECT_URI = process.env.DISCORD_REDIRECT_URI || "http://localhost:3000/auth/discord/callback";
 
 const API_SECRET = process.env.API_SECRET;
 
 if (!API_SECRET) {
-  console.error("❌ FATAL: env var API_SECRET belum di-set!");
+  console.error("❌ FATAL: env var API_SECRET is not set!");
   process.exit(1);
 }
 
@@ -330,8 +330,6 @@ app.delete("/api/scripts/internal/:id", requireInternalSecret, (req, res) => {
 
 // ==================== HWID ENDPOINTS ====================
 
-// Dipanggil dari dalam Lua script (via HttpGet) saat user run script
-// GET /api/hwid/check?scriptId=xxx&key=xxx&hwid=xxx
 app.get("/api/hwid/check", (req, res) => {
   const { scriptId, key, hwid } = req.query;
 
@@ -339,13 +337,11 @@ app.get("/api/hwid/check", (req, res) => {
     return res.type("application/json").json({ valid: false, reason: "Missing params" });
   }
 
-  // Free mode — tidak perlu key, HWID tidak dicek
   const botConfig = readBotConfig();
   const isFreeMode = !!(botConfig[req.query.guildId]?.freeMode?.[scriptId]) ||
     Object.values(botConfig).some(g => g?.freeMode?.[scriptId] === true);
 
   if (isFreeMode) {
-    // Trigger webhook jika ada, tanpa validasi key/HWID
     triggerWebhookAsync({ scriptId, key: null, hwid, userId: null, username: null });
     return res.json({ valid: true, freeMode: true });
   }
@@ -363,7 +359,6 @@ app.get("/api/hwid/check", (req, res) => {
   }
 
   if (!keyData.hwid) {
-    // Pertama kali run — daftarkan HWID
     keyData.hwid = hwid;
     writeKeys(keys);
     triggerWebhookAsync({ scriptId, key: keyData.key, hwid, userId: keyData.userId, username: keyData.username });
@@ -374,12 +369,10 @@ app.get("/api/hwid/check", (req, res) => {
     return res.json({ valid: false, reason: "HWID Mismatch - Contact Admin" });
   }
 
-  // HWID match — trigger webhook
   triggerWebhookAsync({ scriptId, key: keyData.key, hwid, userId: keyData.userId, username: keyData.username });
   return res.json({ valid: true });
 });
 
-// Reset HWID via internal API (dari bot)
 app.post("/api/hwid/reset", requireInternalSecret, (req, res) => {
   const { userId, scriptId } = req.body;
   if (!userId) return res.status(400).json({ error: "userId required" });
@@ -403,7 +396,6 @@ app.post("/api/hwid/reset", requireInternalSecret, (req, res) => {
 
 // ==================== WEBHOOK ENDPOINTS ====================
 
-// Helper async — fire-and-forget, tidak block response
 async function triggerWebhookAsync({ scriptId, key, hwid, userId, username }) {
   try {
     const botConfig = readBotConfig();
@@ -435,7 +427,6 @@ async function triggerWebhookAsync({ scriptId, key, hwid, userId, username }) {
   }
 }
 
-// GET webhook URL (internal)
 app.get("/api/webhook/get", requireInternalSecret, (req, res) => {
   const { scriptId } = req.query;
   if (!scriptId) return res.status(400).json({ error: "scriptId required" });
@@ -443,7 +434,6 @@ app.get("/api/webhook/get", requireInternalSecret, (req, res) => {
   res.json({ webhook: botConfig.webhooks?.[scriptId] || null });
 });
 
-// SET webhook URL (internal, dipanggil bot)
 app.post("/api/webhook/set", requireInternalSecret, (req, res) => {
   const { scriptId, url } = req.body;
   if (!scriptId || !url) return res.status(400).json({ error: "scriptId and url required" });
@@ -454,7 +444,6 @@ app.post("/api/webhook/set", requireInternalSecret, (req, res) => {
   res.json({ success: true });
 });
 
-// DELETE webhook URL (internal)
 app.delete("/api/webhook/delete", requireInternalSecret, (req, res) => {
   const { scriptId } = req.body;
   if (!scriptId) return res.status(400).json({ error: "scriptId required" });
@@ -478,7 +467,6 @@ app.get("/api/loader/:id.lua", (req, res) => {
   }
 
   const botConfig = readBotConfig();
-  // Cek free mode dari semua guild yang punya script ini
   const isFreeMode = Object.values(botConfig).some(g => g?.freeMode?.[scriptId] === true);
   const base = getBaseUrl(req);
 
@@ -491,10 +479,8 @@ end
 return`;
   }
 
-  // Wrapper HWID check + webhook trigger yang diinjeksi di atas script user
   function buildHwidWrapper(sourceCode, keyValue, freeModeFlag) {
     if (freeModeFlag) {
-      // Free mode: cek HWID untuk webhook saja, tidak kick jika mismatch
       return `-- Kingmor Protection System
 local _km_HttpService = game:GetService("HttpService")
 local _km_Players = game:GetService("Players")
@@ -506,16 +492,15 @@ local _km_ok, _km_id = pcall(function()
 end)
 if _km_ok then _km_hwid = tostring(_km_id) end
 
--- Kirim notifikasi webhook (free mode, tidak blokir)
+-- Send webhook notification (free mode, does not block)
 pcall(function()
     game:HttpGet("${base}/api/hwid/check?scriptId=${scriptId}&hwid=" .. _km_hwid)
 end)
 
--- Script user
+-- User script
 ${sourceCode}`;
     }
 
-    // Key mode: HWID check ketat, kick jika gagal
     return `-- Kingmor Protection System
 local _km_HttpService = game:GetService("HttpService")
 local _km_Players = game:GetService("Players")
@@ -546,7 +531,7 @@ if not _km_data or not _km_data.valid then
     return
 end
 
--- Script user
+-- User script
 ${sourceCode}`;
   }
 
@@ -557,7 +542,6 @@ ${sourceCode}`;
     || userAgent.includes("ScriptWare") || userAgent.includes("Electron");
 
   if (isRobloxRequest) {
-    // ✅ FIX: urutan pengecekan benar — enabled → freeMode → key
     if (!script.enabled) {
       return res.status(200).type("text/plain").set("Cache-Control", "no-store")
         .send(kickPlayer("Script Disabled"));
@@ -572,12 +556,10 @@ ${sourceCode}`;
     const sourceCode = fs.readFileSync(fp, "utf8");
 
     if (isFreeMode) {
-      // ✅ FIX: free mode langsung serve tanpa cek key sama sekali
       const wrapped = buildHwidWrapper(sourceCode, "", true);
       return res.status(200).type("text/plain").set("Cache-Control", "no-store").send(wrapped);
     }
 
-    // Key mode
     const providedKey = (req.query.key || "").toLowerCase().trim();
     if (!providedKey) {
       return res.status(200).type("text/plain").set("Cache-Control", "no-store")
@@ -601,8 +583,7 @@ ${sourceCode}`;
     return res.status(200).type("text/plain").set("Cache-Control", "no-store").send(wrapped);
   }
 
-  // ── Browser request: tampilkan loader page ──
-  // Lookup key milik user (dari ?uid= query param yang dikirim bot)
+  // ── Browser request: show loader page ──
   const uid = req.query.uid || null;
   let userScriptKey = null;
   if (!isFreeMode && uid) {
