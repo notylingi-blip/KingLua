@@ -21,11 +21,30 @@ const path = require("path");
 const axios = require("axios");
 
 const CONFIG = {
-  token: process.env.BOT_TOKEN || "TOKEN_LO_DISINI",
+  token: process.env.BOT_TOKEN,
   clientId: process.env.DISCORD_CLIENT_ID || "1545625902585487370",
-  apiBase: process.env.API_BASE || "https://kingmor-production.up.railway.app",
-  apiSecret: process.env.API_SECRET || "spidey-internal-secret"
+  apiBase: process.env.API_BASE,
+  apiSecret: process.env.API_SECRET
 };
+
+// ==================== STARTUP VALIDATION ====================
+// Ini sengaja bikin bot gagal start kalau config-nya nggak lengkap, daripada jalan
+// tapi diam-diam gagal manggil API web (yang tadinya bikin "scripts nggak muncul"
+// susah didiagnosa karena catch block-nya nggak nge-log apa-apa).
+const missing = [];
+if (!CONFIG.token) missing.push("BOT_TOKEN");
+if (!CONFIG.apiBase) missing.push("API_BASE");
+if (!CONFIG.apiSecret) missing.push("API_SECRET");
+
+if (missing.length > 0) {
+  console.error(`❌ FATAL: env var berikut belum di-set: ${missing.join(", ")}`);
+  console.error(`   API_BASE harus URL publik service web Kingmor (contoh: https://kingmor-production.up.railway.app)`);
+  console.error(`   API_SECRET harus SAMA PERSIS dengan API_SECRET di service web.`);
+  process.exit(1);
+}
+
+// Buang trailing slash biar nggak double slash pas digabung dengan path
+CONFIG.apiBase = CONFIG.apiBase.replace(/\/+$/, "");
 
 const DATA_DIR = path.join(__dirname, "data");
 const KEYS_FILE = path.join(DATA_DIR, "keys.json");
@@ -62,6 +81,9 @@ function hasPermission(member, guildId) {
   return member.roles.cache.has(roleId);
 }
 
+// Header standar buat semua request internal ke web API
+const internalHeaders = { "x-api-secret": CONFIG.apiSecret };
+
 const scriptCache = new Map();
 const CACHE_TTL = 30000;
 
@@ -69,25 +91,41 @@ const panelTempData = new Map();
 const buyerRoleTempData = new Map();
 const freeModeTempData = new Map();
 
-async function getScriptsByOwner(ownerId) {
+// Helper biar error dari axios kebaca jelas di log, bukan cuma "gagal" doang.
+function describeAxiosError(err) {
+  if (err.response) {
+    return `HTTP ${err.response.status} — ${JSON.stringify(err.response.data)}`;
+  }
+  if (err.request) {
+    return `Tidak ada response dari server (cek API_BASE benar/salah, atau service web down): ${err.code || err.message}`;
+  }
+  return err.message;
+}
+
+async function getScriptsByOwner(ownerId, { bypassCache = false } = {}) {
   const cacheKey = `scripts_${ownerId}`;
   const cached = scriptCache.get(cacheKey);
-  
-  if (cached && (Date.now() - cached.timestamp) < CACHE_TTL) {
+
+  if (!bypassCache && cached && (Date.now() - cached.timestamp) < CACHE_TTL) {
     return cached.data;
   }
 
   try {
     const res = await axios.get(`${CONFIG.apiBase}/api/scripts/internal`, {
-      headers: { "x-api-secret": CONFIG.apiSecret },
+      headers: internalHeaders,
       params: { ownerId },
-      timeout: 5000
+      timeout: 8000
     });
     const data = res.data || [];
     scriptCache.set(cacheKey, { data, timestamp: Date.now() });
     return data;
-  } catch {
-    if (cached) return cached.data;
+  } catch (err) {
+    // INI YANG DULU DIAM-DIAM DITELEN. Sekarang di-log biar ketauan kenapa kosong.
+    console.error(`❌ getScriptsByOwner(${ownerId}) gagal: ${describeAxiosError(err)}`);
+    if (cached) {
+      console.warn(`⚠️  Pakai cache lama (umur ${Math.round((Date.now() - cached.timestamp) / 1000)}s) buat ownerId ${ownerId}`);
+      return cached.data;
+    }
     return [];
   }
 }
@@ -108,14 +146,14 @@ async function updateGuildsList() {
       icon: g.icon,
       memberCount: g.memberCount
     }));
-    
-    await axios.post(`${CONFIG.apiBase}/api/admin/guilds/update`, 
+
+    await axios.post(`${CONFIG.apiBase}/api/admin/guilds/update`,
       { guilds },
-      { headers: { "x-api-secret": CONFIG.apiSecret } }
+      { headers: internalHeaders, timeout: 8000 }
     );
     console.log(`✅ Updated guilds list: ${guilds.length} guilds`);
   } catch (err) {
-    console.error("❌ Failed to update guilds list:", err.message);
+    console.error(`❌ Failed to update guilds list: ${describeAxiosError(err)}`);
   }
 }
 
@@ -127,74 +165,79 @@ const commands = [
     .setDescription("Setup panel embed with script selection")
     .addStringOption(o => o.setName("title").setDescription("Title").setRequired(true))
     .addStringOption(o => o.setName("description").setDescription("Description").setRequired(true)),
-  
+
   new SlashCommandBuilder()
     .setName("whitelistrole")
     .setDescription("Set admin role")
     .addRoleOption(o => o.setName("role").setDescription("Role").setRequired(true))
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-  
+
   new SlashCommandBuilder()
     .setName("setbuyerrole")
     .setDescription("Set buyer role for specific script")
     .addRoleOption(o => o.setName("role").setDescription("Role").setRequired(true))
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-  
+
   new SlashCommandBuilder()
     .setName("genkey")
     .setDescription("Generate key")
     .addIntegerOption(o => o.setName("days").setDescription("Duration in days (0=lifetime)").setRequired(true))
     .addIntegerOption(o => o.setName("amount").setDescription("Number of keys").setRequired(false)),
-  
+
   new SlashCommandBuilder()
     .setName("whitelist")
     .setDescription("Whitelist user/role for a script")
     .addIntegerOption(o => o.setName("days").setDescription("Duration in days (0=lifetime)").setRequired(true))
     .addUserOption(o => o.setName("user").setDescription("User").setRequired(false))
     .addRoleOption(o => o.setName("role").setDescription("Role").setRequired(false)),
-  
+
   new SlashCommandBuilder()
     .setName("blacklist")
     .setDescription("Blacklist user")
     .addUserOption(o => o.setName("user").setDescription("User").setRequired(true))
     .addStringOption(o => o.setName("reason").setDescription("Reason").setRequired(false)),
-  
+
   new SlashCommandBuilder()
     .setName("unblacklist")
     .setDescription("Unblacklist user")
     .addUserOption(o => o.setName("user").setDescription("User").setRequired(true)),
-  
+
   new SlashCommandBuilder()
     .setName("revoke")
     .setDescription("Revoke key/user")
     .addStringOption(o => o.setName("key").setDescription("Key").setRequired(false))
     .addUserOption(o => o.setName("user").setDescription("User").setRequired(false)),
-  
+
   new SlashCommandBuilder()
     .setName("listkeys")
     .setDescription("View all keys"),
-  
+
   new SlashCommandBuilder()
     .setName("userinfo")
     .setDescription("View user info")
     .addUserOption(o => o.setName("user").setDescription("User").setRequired(true)),
-  
+
   new SlashCommandBuilder()
     .setName("deletescript")
     .setDescription("Delete your script from Kingmor"),
-  
+
   new SlashCommandBuilder()
     .setName("freemode")
     .setDescription("Enable or disable free mode for a script"),
-  
+
   new SlashCommandBuilder()
     .setName("resethwid")
     .setDescription("Reset HWID for user")
     .addUserOption(o => o.setName("user").setDescription("User").setRequired(true)),
-  
+
   new SlashCommandBuilder()
     .setName("clearcache")
     .setDescription("Clear script cache (admin only)")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
+  new SlashCommandBuilder()
+    .setName("checkconnection")
+    .setDescription("Check connection between bot and web dashboard (admin only)")
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
 ].map(c => c.toJSON());
 
@@ -203,11 +246,12 @@ client.once("ready", async () => {
   try {
     await rest.put(Routes.applicationCommands(CONFIG.clientId), { body: commands });
     console.log(`👑 Bot ready: ${client.user.tag}`);
-    
+    console.log(`🔗 API_BASE: ${CONFIG.apiBase}`);
+
     await updateGuildsList();
     setInterval(updateGuildsList, 60 * 1000);
-  } catch (err) { 
-    console.error("❌ Failed to register commands:", err); 
+  } catch (err) {
+    console.error("❌ Failed to register commands:", err);
   }
 });
 
@@ -275,9 +319,9 @@ async function sendPanelEmbed(channel, title, description, scriptId, scriptName,
 client.on("interactionCreate", async interaction => {
   try {
     if (interaction.isButton() && isBlacklisted(interaction.user.id)) {
-      return interaction.reply({ 
-        content: "❌ You Have Been Blacklisted By The Owner", 
-        ephemeral: true 
+      return interaction.reply({
+        content: "❌ You Have Been Blacklisted By The Owner",
+        ephemeral: true
       }).catch(() => {});
     }
 
@@ -294,19 +338,20 @@ client.on("interactionCreate", async interaction => {
           let isFreeMode = false;
           try {
             const freeModeRes = await axios.get(`${CONFIG.apiBase}/api/freemode/${interaction.guildId}/${scriptId}`, {
-              headers: { "x-api-secret": CONFIG.apiSecret },
-              timeout: 5000
+              headers: internalHeaders,
+              timeout: 8000
             });
             isFreeMode = freeModeRes.data.freeMode === true;
           } catch (err) {
+            console.error(`❌ freemode check gagal: ${describeAxiosError(err)}`);
             const cfg = readConfig()[interaction.guildId] || {};
             isFreeMode = cfg.freeMode && cfg.freeMode[scriptId] === true;
           }
 
           if (isFreeMode) {
             const loaderCode = `loadstring(game:HttpGet("${CONFIG.apiBase}/api/loader/${scriptId}.lua"))()`;
-            return interaction.editReply({ 
-              content: `\`\`\`lua\n${loaderCode}\n\`\`\`` 
+            return interaction.editReply({
+              content: `\`\`\`lua\n${loaderCode}\n\`\`\``
             }).catch(() => {});
           }
 
@@ -356,9 +401,9 @@ client.on("interactionCreate", async interaction => {
         try {
           const scriptId = customId.includes(":") ? customId.split(":")[1] : null;
           const cfg = readConfig()[interaction.guildId] || {};
-          
-          const buyerRoleId = scriptId && cfg.buyerRoles && cfg.buyerRoles[scriptId] 
-            ? cfg.buyerRoles[scriptId] 
+
+          const buyerRoleId = scriptId && cfg.buyerRoles && cfg.buyerRoles[scriptId]
+            ? cfg.buyerRoles[scriptId]
             : cfg.buyerRole;
 
           if (!buyerRoleId) {
@@ -482,8 +527,8 @@ client.on("interactionCreate", async interaction => {
         writeKeys(keys);
 
         const cfg = readConfig()[interaction.guildId] || {};
-        const buyerRoleId = cfg.buyerRoles && cfg.buyerRoles[keyData.scriptId] 
-          ? cfg.buyerRoles[keyData.scriptId] 
+        const buyerRoleId = cfg.buyerRoles && cfg.buyerRoles[keyData.scriptId]
+          ? cfg.buyerRoles[keyData.scriptId]
           : cfg.buyerRole;
 
         if (buyerRoleId) {
@@ -505,10 +550,11 @@ client.on("interactionCreate", async interaction => {
         try {
           const scriptId = interaction.values[0];
           await axios.delete(`${CONFIG.apiBase}/api/scripts/internal/${scriptId}`, {
-            headers: { 
-              "x-api-secret": CONFIG.apiSecret,
+            headers: {
+              ...internalHeaders,
               "x-owner-id": interaction.user.id
-            }
+            },
+            timeout: 8000
           });
           const keys = readKeys();
           const filteredKeys = keys.filter(k => k.scriptId !== scriptId);
@@ -516,6 +562,7 @@ client.on("interactionCreate", async interaction => {
           clearCache(interaction.user.id);
           return interaction.editReply({ content: "✅ Script and all its keys have been permanently deleted!" }).catch(() => {});
         } catch (err) {
+          console.error(`❌ deletescript gagal: ${describeAxiosError(err)}`);
           return interaction.editReply({ content: "❌ Failed to delete script." }).catch(() => {});
         }
       }
@@ -525,7 +572,7 @@ client.on("interactionCreate", async interaction => {
         try {
           const scriptId = interaction.values[0];
           const tempData = freeModeTempData.get(interaction.user.id);
-          
+
           if (!tempData) {
             return interaction.editReply({ content: "❌ Session expired. Please run /freemode again." }).catch(() => {});
           }
@@ -545,8 +592,10 @@ client.on("interactionCreate", async interaction => {
                 guildId: interaction.guildId,
                 scriptId: scriptId,
                 enabled: true
-              }, { headers: { "x-api-secret": CONFIG.apiSecret } });
-            } catch {}
+              }, { headers: internalHeaders, timeout: 8000 });
+            } catch (err) {
+              console.error(`❌ freemode/update (enable) gagal: ${describeAxiosError(err)}`);
+            }
             return interaction.editReply({ content: `✅ Free mode has been **ENABLED**!` }).catch(() => {});
           } else {
             delete cfg[interaction.guildId].freeMode[scriptId];
@@ -556,8 +605,10 @@ client.on("interactionCreate", async interaction => {
                 guildId: interaction.guildId,
                 scriptId: scriptId,
                 enabled: false
-              }, { headers: { "x-api-secret": CONFIG.apiSecret } });
-            } catch {}
+              }, { headers: internalHeaders, timeout: 8000 });
+            } catch (err) {
+              console.error(`❌ freemode/update (disable) gagal: ${describeAxiosError(err)}`);
+            }
             return interaction.editReply({ content: `✅ Free mode has been **DISABLED**!` }).catch(() => {});
           }
         } catch (err) {
@@ -570,14 +621,14 @@ client.on("interactionCreate", async interaction => {
         try {
           const mode = interaction.values[0];
           const myScripts = await getScriptsByOwner(interaction.user.id);
-          
+
           if (myScripts.length === 0) {
             return interaction.editReply({ content: "❌ You don't have any scripts yet." }).catch(() => {});
           }
 
           freeModeTempData.set(interaction.user.id, { mode });
           const sortedScripts = myScripts.sort((a, b) => a.name.localeCompare(b.name));
-          const options = sortedScripts.slice(0, 25).map(s => 
+          const options = sortedScripts.slice(0, 25).map(s =>
             new StringSelectMenuOptionBuilder()
               .setLabel(s.name.length > 50 ? s.name.slice(0, 47) + "..." : s.name)
               .setValue(s.id)
@@ -587,9 +638,9 @@ client.on("interactionCreate", async interaction => {
             .setPlaceholder("Select a script...")
             .addOptions(options);
 
-          return interaction.editReply({ 
-            content: `Select a script to ${mode} free mode:`, 
-            components: [new ActionRowBuilder().addComponents(select)] 
+          return interaction.editReply({
+            content: `Select a script to ${mode} free mode:`,
+            components: [new ActionRowBuilder().addComponents(select)]
           }).catch(() => {});
         } catch (err) {
           return interaction.editReply({ content: "❌ Failed to load scripts." }).catch(() => {});
@@ -609,7 +660,7 @@ client.on("interactionCreate", async interaction => {
 
           const myScripts = await getScriptsByOwner(interaction.user.id);
           const selectedScript = myScripts.find(s => s.id === scriptId);
-          
+
           if (!selectedScript) {
             return interaction.editReply({ content: "❌ Script not found or not yours!" }).catch(() => {});
           }
@@ -626,7 +677,7 @@ client.on("interactionCreate", async interaction => {
         try {
           const scriptId = interaction.values[0];
           const tempData = buyerRoleTempData.get(interaction.user.id);
-          
+
           if (!tempData) {
             return interaction.editReply({ content: "❌ Session expired." }).catch(() => {});
           }
@@ -637,7 +688,7 @@ client.on("interactionCreate", async interaction => {
           const cfg = readConfig();
           if (!cfg[interaction.guildId]) cfg[interaction.guildId] = {};
           if (!cfg[interaction.guildId].buyerRoles) cfg[interaction.guildId].buyerRoles = {};
-          
+
           cfg[interaction.guildId].buyerRoles[scriptId] = roleId;
           writeConfig(cfg);
 
@@ -660,7 +711,7 @@ client.on("interactionCreate", async interaction => {
 
           const myScripts = await getScriptsByOwner(adminId);
           const owned = myScripts.find(s => s.id === scriptId);
-          
+
           if (!owned) {
             return interaction.editReply({ content: "❌ This script is not yours." }).catch(() => {});
           }
@@ -668,17 +719,17 @@ client.on("interactionCreate", async interaction => {
           const keys = readKeys();
           const expiry = days === 0 ? null : new Date(Date.now() + days * 86400000).toISOString();
           const cfg = readConfig()[interaction.guildId] || {};
-          const buyerRoleId = cfg.buyerRoles && cfg.buyerRoles[scriptId] 
-            ? cfg.buyerRoles[scriptId] 
+          const buyerRoleId = cfg.buyerRoles && cfg.buyerRoles[scriptId]
+            ? cfg.buyerRoles[scriptId]
             : cfg.buyerRole;
           const panelChannelId = cfg.panelChannelId;
 
           if (targetType === "user") {
             const key = generateKey();
-            keys.push({ 
-              key, hwid: null, userId: String(targetId), username: null, scriptId, 
-              redeemedAt: new Date().toISOString(), expiry, 
-              createdAt: new Date().toISOString(), createdBy: adminId 
+            keys.push({
+              key, hwid: null, userId: String(targetId), username: null, scriptId,
+              redeemedAt: new Date().toISOString(), expiry,
+              createdAt: new Date().toISOString(), createdBy: adminId
             });
             writeKeys(keys);
 
@@ -690,8 +741,8 @@ client.on("interactionCreate", async interaction => {
             }
 
             const channelTag = panelChannelId ? `<#${panelChannelId}>` : `<#${interaction.channelId}>`;
-            return interaction.editReply({ 
-              content: `<@${targetId}> You have been whitelisted for **${owned.name}**!\nYou can access the script via this message --> ${channelTag}` 
+            return interaction.editReply({
+              content: `<@${targetId}> You have been whitelisted for **${owned.name}**!\nYou can access the script via this message --> ${channelTag}`
             }).catch(() => {});
           }
 
@@ -703,21 +754,21 @@ client.on("interactionCreate", async interaction => {
             let addedCount = 0;
             for (const [, member] of members) {
               const userKey = generateKey();
-              keys.push({ 
-                key: userKey, hwid: null, userId: String(member.id), username: member.user.username, 
-                scriptId, redeemedAt: new Date().toISOString(), expiry, 
-                createdAt: new Date().toISOString(), createdBy: adminId 
+              keys.push({
+                key: userKey, hwid: null, userId: String(member.id), username: member.user.username,
+                scriptId, redeemedAt: new Date().toISOString(), expiry,
+                createdAt: new Date().toISOString(), createdBy: adminId
               });
               addedCount++;
-              if (buyerRoleId) { 
-                try { await member.roles.add(buyerRoleId); } catch {} 
+              if (buyerRoleId) {
+                try { await member.roles.add(buyerRoleId); } catch {}
               }
             }
             writeKeys(keys);
 
             const channelTag = panelChannelId ? `<#${panelChannelId}>` : `<#${interaction.channelId}>`;
-            return interaction.editReply({ 
-              content: `<@&${targetId}> You have been whitelisted for **${owned.name}**! (${addedCount} members)\nYou can access the script via this message --> ${channelTag}` 
+            return interaction.editReply({
+              content: `<@&${targetId}> You have been whitelisted for **${owned.name}**! (${addedCount} members)\nYou can access the script via this message --> ${channelTag}`
             }).catch(() => {});
           }
         } catch (err) {
@@ -746,18 +797,18 @@ client.on("interactionCreate", async interaction => {
 
           for (let i = 0; i < amount; i++) {
             const key = generateKey();
-            keys.push({ 
-              key, hwid: null, userId: null, username: null, scriptId, 
-              redeemedAt: null, expiry, 
-              createdAt: new Date().toISOString(), createdBy: adminId 
+            keys.push({
+              key, hwid: null, userId: null, username: null, scriptId,
+              redeemedAt: null, expiry,
+              createdAt: new Date().toISOString(), createdBy: adminId
             });
             generated.push(key);
           }
           writeKeys(keys);
 
           const keyList = generated.map(k => `\`${k}\``).join("\n");
-          return interaction.editReply({ 
-            content: `✅ **${amount} key(s)** generated for script **${owned.name}**!\n\n${keyList}` 
+          return interaction.editReply({
+            content: `✅ **${amount} key(s)** generated for script **${owned.name}**!\n\n${keyList}`
           }).catch(() => {});
         } catch (err) {
           return interaction.editReply({ content: "❌ Failed to generate keys." }).catch(() => {});
@@ -776,6 +827,42 @@ client.on("interactionCreate", async interaction => {
         return interaction.reply({ content: "✅ Cache cleared successfully!", ephemeral: true }).catch(() => {});
       }
 
+      if (commandName === "checkconnection") {
+        if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+          return interaction.reply({ content: "❌ Admin only.", ephemeral: true }).catch(() => {});
+        }
+        await interaction.deferReply({ ephemeral: true }).catch(() => {});
+        try {
+          const start = Date.now();
+          const res = await axios.get(`${CONFIG.apiBase}/health`, { timeout: 8000 });
+          const ms = Date.now() - start;
+
+          let secretStatus = "❓ Belum dicek";
+          try {
+            await axios.get(`${CONFIG.apiBase}/api/scripts/internal`, {
+              headers: internalHeaders,
+              params: { ownerId: interaction.user.id },
+              timeout: 8000
+            });
+            secretStatus = "✅ API_SECRET cocok";
+          } catch (err) {
+            if (err.response && err.response.status === 403) {
+              secretStatus = "❌ API_SECRET TIDAK COCOK antara bot dan web";
+            } else {
+              secretStatus = `❌ Gagal cek: ${describeAxiosError(err)}`;
+            }
+          }
+
+          return interaction.editReply({
+            content: `🔗 **Connection Check**\n\n• API_BASE: \`${CONFIG.apiBase}\`\n• Health check: ✅ OK (${ms}ms)\n• Secret check: ${secretStatus}`
+          }).catch(() => {});
+        } catch (err) {
+          return interaction.editReply({
+            content: `🔗 **Connection Check**\n\n• API_BASE: \`${CONFIG.apiBase}\`\n• Health check: ❌ GAGAL — ${describeAxiosError(err)}\n\nKemungkinan API_BASE salah atau service web sedang down.`
+          }).catch(() => {});
+        }
+      }
+
       if (commandName === "whitelistrole") {
         if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
           return interaction.reply({ content: "❌ Admin only.", ephemeral: true }).catch(() => {});
@@ -792,13 +879,13 @@ client.on("interactionCreate", async interaction => {
         if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
           return interaction.reply({ content: "❌ Admin only.", ephemeral: true }).catch(() => {});
         }
-        
+
         await interaction.deferReply({ ephemeral: true }).catch(() => {});
-        
+
         try {
           const role = interaction.options.getRole("role");
           const myScripts = await getScriptsByOwner(interaction.user.id);
-          
+
           if (myScripts.length === 0) {
             return interaction.editReply({ content: "❌ You don't have any scripts yet." }).catch(() => {});
           }
@@ -808,18 +895,18 @@ client.on("interactionCreate", async interaction => {
             const cfg = readConfig();
             if (!cfg[interaction.guildId]) cfg[interaction.guildId] = {};
             if (!cfg[interaction.guildId].buyerRoles) cfg[interaction.guildId].buyerRoles = {};
-            
+
             cfg[interaction.guildId].buyerRoles[scriptId] = role.id;
             writeConfig(cfg);
 
-            return interaction.editReply({ 
-              content: `✅ Buyer role <@&${role.id}> has been set for script **${myScripts[0].name}**!` 
+            return interaction.editReply({
+              content: `✅ Buyer role <@&${role.id}> has been set for script **${myScripts[0].name}**!`
             }).catch(() => {});
           }
 
           buyerRoleTempData.set(interaction.user.id, { roleId: role.id });
           const sortedScripts = myScripts.sort((a, b) => a.name.localeCompare(b.name));
-          const options = sortedScripts.slice(0, 25).map(s => 
+          const options = sortedScripts.slice(0, 25).map(s =>
             new StringSelectMenuOptionBuilder()
               .setLabel(s.name.length > 50 ? s.name.slice(0, 47) + "..." : s.name)
               .setValue(s.id)
@@ -829,9 +916,9 @@ client.on("interactionCreate", async interaction => {
             .setPlaceholder("Select a script...")
             .addOptions(options);
 
-          return interaction.editReply({ 
-            content: `Select a script to assign buyer role <@&${role.id}>:`, 
-            components: [new ActionRowBuilder().addComponents(select)] 
+          return interaction.editReply({
+            content: `Select a script to assign buyer role <@&${role.id}>:`,
+            components: [new ActionRowBuilder().addComponents(select)]
           }).catch(() => {});
         } catch (err) {
           return interaction.editReply({ content: "❌ Failed to set buyer role." }).catch(() => {});
@@ -844,13 +931,13 @@ client.on("interactionCreate", async interaction => {
         }
 
         await interaction.deferReply({ ephemeral: true }).catch(() => {});
-        
+
         try {
           const title = interaction.options.getString("title");
           const description = interaction.options.getString("description");
-          
+
           const myScripts = await getScriptsByOwner(interaction.user.id);
-          
+
           if (myScripts.length === 0) {
             return interaction.editReply({ content: "❌ You don't have any scripts yet." }).catch(() => {});
           }
@@ -864,7 +951,7 @@ client.on("interactionCreate", async interaction => {
           setTimeout(() => panelTempData.delete(interaction.user.id), 5 * 60 * 1000);
 
           const sortedScripts = myScripts.sort((a, b) => a.name.localeCompare(b.name));
-          const options = sortedScripts.slice(0, 25).map(s => 
+          const options = sortedScripts.slice(0, 25).map(s =>
             new StringSelectMenuOptionBuilder()
               .setLabel(s.name.length > 50 ? s.name.slice(0, 47) + "..." : s.name)
               .setValue(s.id)
@@ -874,9 +961,9 @@ client.on("interactionCreate", async interaction => {
             .setPlaceholder("Select a script for this panel...")
             .addOptions(options);
 
-          return interaction.editReply({ 
-            content: "Select which script you want to use for this panel:", 
-            components: [new ActionRowBuilder().addComponents(select)] 
+          return interaction.editReply({
+            content: "Select which script you want to use for this panel:",
+            components: [new ActionRowBuilder().addComponents(select)]
           }).catch(() => {});
         } catch (err) {
           return interaction.editReply({ content: "❌ Failed to create panel." }).catch(() => {});
@@ -895,7 +982,7 @@ client.on("interactionCreate", async interaction => {
           }
 
           const sortedScripts = myScripts.sort((a, b) => a.name.localeCompare(b.name));
-          const options = sortedScripts.slice(0, 25).map(s => 
+          const options = sortedScripts.slice(0, 25).map(s =>
             new StringSelectMenuOptionBuilder()
               .setLabel(s.name.length > 50 ? s.name.slice(0, 47) + "..." : s.name)
               .setValue(s.id)
@@ -905,9 +992,9 @@ client.on("interactionCreate", async interaction => {
             .setPlaceholder("Select a script to delete...")
             .addOptions(options);
 
-          return interaction.editReply({ 
-            content: "Select the script to delete permanently:", 
-            components: [new ActionRowBuilder().addComponents(select)] 
+          return interaction.editReply({
+            content: "Select the script to delete permanently:",
+            components: [new ActionRowBuilder().addComponents(select)]
           }).catch(() => {});
         } catch (err) {
           return interaction.editReply({ content: "❌ Failed to load scripts." }).catch(() => {});
@@ -918,9 +1005,9 @@ client.on("interactionCreate", async interaction => {
         if (!hasPermission(interaction.member, interaction.guildId)) {
           return interaction.reply({ content: "❌ No Permission.", ephemeral: true }).catch(() => {});
         }
-        
+
         await interaction.deferReply({ ephemeral: true }).catch(() => {});
-        
+
         try {
           const options = [
             new StringSelectMenuOptionBuilder()
@@ -940,9 +1027,9 @@ client.on("interactionCreate", async interaction => {
             .setPlaceholder("Select mode...")
             .addOptions(options);
 
-          return interaction.editReply({ 
-            content: "Select whether to enable or disable free mode:", 
-            components: [new ActionRowBuilder().addComponents(select)] 
+          return interaction.editReply({
+            content: "Select whether to enable or disable free mode:",
+            components: [new ActionRowBuilder().addComponents(select)]
           }).catch(() => {});
         } catch (err) {
           return interaction.editReply({ content: "❌ Failed to open freemode menu." }).catch(() => {});
@@ -976,17 +1063,17 @@ client.on("interactionCreate", async interaction => {
             const keys = readKeys();
             const expiry = days === 0 ? null : new Date(Date.now() + days * 86400000).toISOString();
             const cfg = readConfig()[interaction.guildId] || {};
-            const buyerRoleId = cfg.buyerRoles && cfg.buyerRoles[scriptId] 
-              ? cfg.buyerRoles[scriptId] 
+            const buyerRoleId = cfg.buyerRoles && cfg.buyerRoles[scriptId]
+              ? cfg.buyerRoles[scriptId]
               : cfg.buyerRole;
             const panelChannelId = cfg.panelChannelId;
 
             if (targetUser) {
               const key = generateKey();
-              keys.push({ 
-                key, hwid: null, userId: String(targetUser.id), username: targetUser.username, scriptId, 
-                redeemedAt: new Date().toISOString(), expiry, 
-                createdAt: new Date().toISOString(), createdBy: interaction.user.id 
+              keys.push({
+                key, hwid: null, userId: String(targetUser.id), username: targetUser.username, scriptId,
+                redeemedAt: new Date().toISOString(), expiry,
+                createdAt: new Date().toISOString(), createdBy: interaction.user.id
               });
               writeKeys(keys);
 
@@ -998,8 +1085,8 @@ client.on("interactionCreate", async interaction => {
               }
 
               const channelTag = panelChannelId ? `<#${panelChannelId}>` : `<#${interaction.channelId}>`;
-              return interaction.editReply({ 
-                content: `<@${targetUser.id}> You have been whitelisted for **${myScripts[0].name}**!\nYou can access the script via this message --> ${channelTag}` 
+              return interaction.editReply({
+                content: `<@${targetUser.id}> You have been whitelisted for **${myScripts[0].name}**!\nYou can access the script via this message --> ${channelTag}`
               }).catch(() => {});
             }
 
@@ -1011,29 +1098,29 @@ client.on("interactionCreate", async interaction => {
               let addedCount = 0;
               for (const [, member] of members) {
                 const userKey = generateKey();
-                keys.push({ 
-                  key: userKey, hwid: null, userId: String(member.id), username: member.user.username, 
-                  scriptId, redeemedAt: new Date().toISOString(), expiry, 
-                  createdAt: new Date().toISOString(), createdBy: interaction.user.id 
+                keys.push({
+                  key: userKey, hwid: null, userId: String(member.id), username: member.user.username,
+                  scriptId, redeemedAt: new Date().toISOString(), expiry,
+                  createdAt: new Date().toISOString(), createdBy: interaction.user.id
                 });
                 addedCount++;
-                if (buyerRoleId) { 
-                  try { await member.roles.add(buyerRoleId); } catch {} 
+                if (buyerRoleId) {
+                  try { await member.roles.add(buyerRoleId); } catch {}
                 }
               }
               writeKeys(keys);
 
               const channelTag = panelChannelId ? `<#${panelChannelId}>` : `<#${interaction.channelId}>`;
-              return interaction.editReply({ 
-                content: `<@&${targetRole.id}> You have been whitelisted for **${myScripts[0].name}**! (${addedCount} members)\nYou can access the script via this message --> ${channelTag}` 
+              return interaction.editReply({
+                content: `<@&${targetRole.id}> You have been whitelisted for **${myScripts[0].name}**! (${addedCount} members)\nYou can access the script via this message --> ${channelTag}`
               }).catch(() => {});
             }
           }
 
           await interaction.editReply({ content: "_ _" }).catch(() => {});
-          
+
           const sortedScripts = myScripts.sort((a, b) => a.name.localeCompare(b.name));
-          const options = sortedScripts.slice(0, 25).map(s => 
+          const options = sortedScripts.slice(0, 25).map(s =>
             new StringSelectMenuOptionBuilder()
               .setLabel(s.name.length > 50 ? s.name.slice(0, 47) + "..." : s.name)
               .setValue(s.id)
@@ -1043,8 +1130,8 @@ client.on("interactionCreate", async interaction => {
             .setPlaceholder("Select a script...")
             .addOptions(options);
 
-          return interaction.followUp({ 
-            content: `Select a script to whitelist:`, 
+          return interaction.followUp({
+            content: `Select a script to whitelist:`,
             components: [new ActionRowBuilder().addComponents(select)],
             ephemeral: true
           }).catch(() => {});
@@ -1067,9 +1154,9 @@ client.on("interactionCreate", async interaction => {
             return interaction.editReply({ content: "❌ This user is already blacklisted!" }).catch(() => {});
           }
 
-          bl.push({ 
-            userId: String(targetUser.id), username: targetUser.username, reason, 
-            blacklistedBy: interaction.user.id, blacklistedAt: new Date().toISOString() 
+          bl.push({
+            userId: String(targetUser.id), username: targetUser.username, reason,
+            blacklistedBy: interaction.user.id, blacklistedAt: new Date().toISOString()
           });
           writeBlacklist(bl);
 
@@ -1077,8 +1164,8 @@ client.on("interactionCreate", async interaction => {
           const newKeys = keys.filter(k => String(k.userId) !== String(targetUser.id));
           writeKeys(newKeys);
 
-          return interaction.editReply({ 
-            content: `🚫 **<@${targetUser.id}> has been Blacklisted!**\nAll script access has been revoked.` 
+          return interaction.editReply({
+            content: `🚫 **<@${targetUser.id}> has been Blacklisted!**\nAll script access has been revoked.`
           }).catch(() => {});
         } catch (err) {
           return interaction.editReply({ content: "❌ Failed to blacklist user." }).catch(() => {});
@@ -1133,23 +1220,23 @@ client.on("interactionCreate", async interaction => {
 
             for (let i = 0; i < amount; i++) {
               const key = generateKey();
-              keys.push({ 
-                key, hwid: null, userId: null, username: null, scriptId, 
-                redeemedAt: null, expiry, 
-                createdAt: new Date().toISOString(), createdBy: interaction.user.id 
+              keys.push({
+                key, hwid: null, userId: null, username: null, scriptId,
+                redeemedAt: null, expiry,
+                createdAt: new Date().toISOString(), createdBy: interaction.user.id
               });
               generated.push(key);
             }
             writeKeys(keys);
 
             const keyList = generated.map(k => `\`${k}\``).join("\n");
-            return interaction.editReply({ 
-              content: `✅ **${amount} key(s)** generated for script **${myScripts[0].name}**!\n\n${keyList}` 
+            return interaction.editReply({
+              content: `✅ **${amount} key(s)** generated for script **${myScripts[0].name}**!\n\n${keyList}`
             }).catch(() => {});
           }
 
           const sortedScripts = myScripts.sort((a, b) => a.name.localeCompare(b.name));
-          const options = sortedScripts.slice(0, 25).map(s => 
+          const options = sortedScripts.slice(0, 25).map(s =>
             new StringSelectMenuOptionBuilder()
               .setLabel(s.name.length > 50 ? s.name.slice(0, 47) + "..." : s.name)
               .setValue(s.id)
@@ -1159,9 +1246,9 @@ client.on("interactionCreate", async interaction => {
             .setPlaceholder("Select a script...")
             .addOptions(options);
 
-          return interaction.editReply({ 
-            content: `Select a script to generate ${amount} key(s):`, 
-            components: [new ActionRowBuilder().addComponents(select)] 
+          return interaction.editReply({
+            content: `Select a script to generate ${amount} key(s):`,
+            components: [new ActionRowBuilder().addComponents(select)]
           }).catch(() => {});
         } catch (err) {
           return interaction.editReply({ content: "❌ Failed to generate keys." }).catch(() => {});
@@ -1213,9 +1300,9 @@ client.on("interactionCreate", async interaction => {
         try {
           const targetUser = interaction.options.getUser("user");
           const keys = readKeys();
-          
+
           const userKeys = keys.filter(k => String(k.userId) === String(targetUser.id));
-          
+
           if (userKeys.length === 0) {
             return interaction.editReply({ content: "❌ User doesn't have any key!" }).catch(() => {});
           }
@@ -1350,11 +1437,5 @@ client.on("interactionCreate", async interaction => {
 process.on("unhandledRejection", (error) => {
   console.error("❌ Unhandled rejection:", error);
 });
-
-// Validasi token sebelum login
-if (!CONFIG.token || CONFIG.token === "TOKEN_LO_DISINI") {
-  console.error("❌ BOT_TOKEN environment variable is not set! Bot will not start.");
-  process.exit(1);
-}
 
 client.login(CONFIG.token);
