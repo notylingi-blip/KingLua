@@ -73,6 +73,30 @@ function hasPermission(member, guildId) {
   return member.roles.cache.has(roleId);
 }
 
+// ==================== GUILD SCRIPT HELPER ====================
+// Ambil script yang terdaftar di guild ini melalui panel
+// Mengembalikan { scriptId, ownerId } atau null jika tidak ada panel
+function getGuildPanelScript(guildId) {
+  const cfg = readConfig()[guildId] || {};
+  const scriptId = cfg.panelScriptId;
+  const ownerId = cfg.panelOwnerId;
+  if (!scriptId) return null;
+  return { scriptId, ownerId: ownerId || null };
+}
+
+// Fetch info script dari server berdasarkan scriptId
+async function fetchScriptById(scriptId) {
+  try {
+    const res = await axios.get(`${CONFIG.apiBase}/api/scripts/internal/${scriptId}`, {
+      headers: internalHeaders, timeout: 8000
+    });
+    return res.data || null;
+  } catch (err) {
+    console.error(`❌ fetchScriptById(${scriptId}) failed: ${describeAxiosError(err)}`);
+    return null;
+  }
+}
+
 const internalHeaders = { "x-api-secret": CONFIG.apiSecret };
 
 const scriptCache = new Map();
@@ -158,7 +182,7 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName("whitelist")
-    .setDescription("Whitelist user/role for a script")
+    .setDescription("Whitelist user/role for the script registered in this server")
     .addIntegerOption(o => o.setName("days").setDescription("Duration in days (0=lifetime)").setRequired(true))
     .addUserOption(o => o.setName("user").setDescription("User").setRequired(false))
     .addRoleOption(o => o.setName("role").setDescription("Role").setRequired(false)),
@@ -267,10 +291,12 @@ async function sendPanelEmbed(channel, title, description, scriptId, scriptName,
 
   await channel.send({ embeds: [embed], components: [row1, row2, row3] });
 
+  // Simpan scriptId, channelId, dan ownerId ke config guild
   const cfg = readConfig();
   if (!cfg[guildId]) cfg[guildId] = {};
   cfg[guildId].panelChannelId = channel.id;
   cfg[guildId].panelScriptId = scriptId;
+  cfg[guildId].panelOwnerId = ownerId; // ← penting untuk whitelist guild-based
   writeConfig(cfg);
 }
 
@@ -620,6 +646,7 @@ client.on("interactionCreate", async interaction => {
         }
       }
 
+      // ==================== WHITELIST SELECT (guild-based) ====================
       if (interaction.customId.startsWith("whitelist_select:")) {
         await interaction.deferReply({ ephemeral: false }).catch(() => {});
         try {
@@ -628,21 +655,46 @@ client.on("interactionCreate", async interaction => {
           const targetId = parts[2];
           const days = parseInt(parts[3]);
           const adminId = parts[4];
-          const scriptId = interaction.values[0];
 
-          const myScripts = await getScriptsByOwner(adminId);
-          const owned = myScripts.find(s => s.id === scriptId);
-          if (!owned) return interaction.editReply({ content: "❌ This script is not yours." }).catch(() => {});
+          // Script sudah diambil dari guild panel sebelumnya, ambil dari param
+          const scriptId = parts[5];
+          const scriptOwnerId = parts[6];
+
+          // Verifikasi script masih ada
+          const scriptInfo = await fetchScriptById(scriptId);
+          if (!scriptInfo) {
+            return interaction.editReply({
+              content: "❌ The script registered in this guild no longer exists."
+            }).catch(() => {});
+          }
+
+          // Verifikasi user yang whitelist punya permission
+          if (!hasPermission(interaction.member, interaction.guildId)) {
+            return interaction.editReply({ content: "❌ No permission." }).catch(() => {});
+          }
 
           const keys = readKeys();
           const expiry = days === 0 ? null : new Date(Date.now() + days * 86400000).toISOString();
           const cfg = readConfig()[interaction.guildId] || {};
-          const buyerRoleId = cfg.buyerRoles && cfg.buyerRoles[scriptId] ? cfg.buyerRoles[scriptId] : cfg.buyerRole;
+          const buyerRoleId = cfg.buyerRoles?.[scriptId] || cfg.buyerRole || null;
 
           if (targetType === "user") {
+            // Cek sudah punya key aktif
+            const existingKey = keys.find(k =>
+              String(k.userId) === String(targetId) &&
+              k.scriptId === scriptId &&
+              !(k.expiry && new Date(k.expiry) < new Date())
+            );
+            if (existingKey) {
+              return interaction.editReply({
+                content: `❌ <@${targetId}> already has access to **${scriptInfo.name}**.`
+              }).catch(() => {});
+            }
+
             const key = generateKey();
             keys.push({
-              key, hwid: null, userId: String(targetId), username: null, scriptId,
+              key, hwid: null,
+              userId: String(targetId), username: null, scriptId,
               redeemedAt: new Date().toISOString(), expiry,
               createdAt: new Date().toISOString(), createdBy: adminId
             });
@@ -656,7 +708,7 @@ client.on("interactionCreate", async interaction => {
             }
 
             return interaction.editReply({
-              content: `✅ <@${targetId}> has been whitelisted for script **${owned.name}**!\nPress the **Get Script** button on the panel to get your loader.`
+              content: `✅ <@${targetId}> has been whitelisted for script **${scriptInfo.name}**!\nPress the **Get Script** button on the panel to get their loader.`
             }).catch(() => {});
           }
 
@@ -664,16 +716,25 @@ client.on("interactionCreate", async interaction => {
             const role = await interaction.guild.roles.fetch(targetId);
             await interaction.guild.members.fetch();
             const members = role.members.filter(m => !m.user.bot);
-
             let addedCount = 0;
+
             for (const [, member] of members) {
+              const existingKey = keys.find(k =>
+                String(k.userId) === String(member.id) &&
+                k.scriptId === scriptId &&
+                !(k.expiry && new Date(k.expiry) < new Date())
+              );
+              if (existingKey) continue;
+
               const userKey = generateKey();
               keys.push({
-                key: userKey, hwid: null, userId: String(member.id), username: member.user.username,
+                key: userKey, hwid: null,
+                userId: String(member.id), username: member.user.username,
                 scriptId, redeemedAt: new Date().toISOString(), expiry,
                 createdAt: new Date().toISOString(), createdBy: adminId
               });
               addedCount++;
+
               if (buyerRoleId) {
                 try { await member.roles.add(buyerRoleId); } catch {}
               }
@@ -681,10 +742,11 @@ client.on("interactionCreate", async interaction => {
             writeKeys(keys);
 
             return interaction.editReply({
-              content: `✅ <@&${targetId}> has been whitelisted for script **${owned.name}**! (${addedCount} members)\nMembers can press the **Get Script** button on the panel to get their loader.`
+              content: `✅ <@&${targetId}> has been whitelisted for script **${scriptInfo.name}**! (${addedCount} members whitelisted)\nMembers can press the **Get Script** button on the panel to get their loader.`
             }).catch(() => {});
           }
-        } catch {
+        } catch (err) {
+          console.error("whitelist_select error:", err);
           return interaction.editReply({ content: "❌ Failed to whitelist." }).catch(() => {});
         }
       }
@@ -950,6 +1012,7 @@ client.on("interactionCreate", async interaction => {
         }
       }
 
+      // ==================== WHITELIST (guild-based) ====================
       if (commandName === "whitelist") {
         if (!hasPermission(interaction.member, interaction.guildId)) {
           return interaction.reply({ content: "❌ No permission.", ephemeral: true }).catch(() => {});
@@ -960,81 +1023,125 @@ client.on("interactionCreate", async interaction => {
           const targetRole = interaction.options.getRole("role");
           const days = interaction.options.getInteger("days");
 
-          if (!targetUser && !targetRole) return interaction.editReply({ content: "❌ Select a user or role!" }).catch(() => {});
+          if (!targetUser && !targetRole) {
+            return interaction.editReply({ content: "❌ Select a user or role!" }).catch(() => {});
+          }
 
-          const myScripts = await getScriptsByOwner(interaction.user.id);
-          if (myScripts.length === 0) return interaction.editReply({ content: "❌ You don't have any scripts yet." }).catch(() => {});
+          // Ambil script yang terdaftar di guild ini via panel
+          const guildData = getGuildPanelScript(interaction.guildId);
+          if (!guildData || !guildData.scriptId) {
+            return interaction.editReply({
+              content: "❌ No script panel found in this server!\nAsk the script owner to run `/setuppanel` in this server first."
+            }).catch(() => {});
+          }
 
-          const targetType = targetUser ? "user" : "role";
-          const targetId = targetUser ? targetUser.id : targetRole.id;
+          const { scriptId, ownerId: scriptOwnerId } = guildData;
 
-          if (myScripts.length === 1) {
-            const scriptId = myScripts[0].id;
-            const keys = readKeys();
-            const expiry = days === 0 ? null : new Date(Date.now() + days * 86400000).toISOString();
-            const cfg = readConfig()[interaction.guildId] || {};
-            const buyerRoleId = cfg.buyerRoles && cfg.buyerRoles[scriptId] ? cfg.buyerRoles[scriptId] : cfg.buyerRole;
-
-            if (targetUser) {
-              const key = generateKey();
-              keys.push({
-                key, hwid: null, userId: String(targetUser.id), username: targetUser.username, scriptId,
-                redeemedAt: new Date().toISOString(), expiry,
-                createdAt: new Date().toISOString(), createdBy: interaction.user.id
-              });
-              writeKeys(keys);
-
-              if (buyerRoleId) {
-                try {
-                  const member = await interaction.guild.members.fetch(targetUser.id);
-                  await member.roles.add(buyerRoleId);
-                } catch {}
-              }
-
+          // Fallback: jika panelOwnerId belum tersimpan (panel lama), fetch dari API
+          let resolvedOwnerId = scriptOwnerId;
+          if (!resolvedOwnerId) {
+            const scriptInfo = await fetchScriptById(scriptId);
+            if (!scriptInfo) {
               return interaction.editReply({
-                content: `✅ <@${targetUser.id}> has been whitelisted for script **${myScripts[0].name}**!\nPress the **Get Script** button on the panel to get your loader.`
+                content: "❌ The script registered in this server no longer exists."
               }).catch(() => {});
             }
-
-            if (targetRole) {
-              const role = await interaction.guild.roles.fetch(targetRole.id);
-              await interaction.guild.members.fetch();
-              const members = role.members.filter(m => !m.user.bot);
-              let addedCount = 0;
-              for (const [, member] of members) {
-                const userKey = generateKey();
-                keys.push({
-                  key: userKey, hwid: null, userId: String(member.id), username: member.user.username,
-                  scriptId, redeemedAt: new Date().toISOString(), expiry,
-                  createdAt: new Date().toISOString(), createdBy: interaction.user.id
-                });
-                addedCount++;
-                if (buyerRoleId) {
-                  try { await member.roles.add(buyerRoleId); } catch {}
-                }
-              }
-              writeKeys(keys);
-
-              return interaction.editReply({
-                content: `✅ <@&${targetRole.id}> has been whitelisted for script **${myScripts[0].name}**! (${addedCount} members)\nMembers can press the **Get Script** button on the panel to get their loader.`
-              }).catch(() => {});
+            resolvedOwnerId = scriptInfo.ownerId;
+            // Update config supaya ke depannya tidak perlu fetch lagi
+            const cfg = readConfig();
+            if (cfg[interaction.guildId]) {
+              cfg[interaction.guildId].panelOwnerId = resolvedOwnerId;
+              writeConfig(cfg);
             }
           }
 
-          await interaction.editReply({ content: "_ _" }).catch(() => {});
-          const options = myScripts.sort((a, b) => a.name.localeCompare(b.name)).slice(0, 25).map(s =>
-            new StringSelectMenuOptionBuilder().setLabel(s.name.length > 50 ? s.name.slice(0, 47) + "..." : s.name).setValue(s.id)
-          );
-          const select = new StringSelectMenuBuilder()
-            .setCustomId(`whitelist_select:${targetType}:${targetId}:${days}:${interaction.user.id}`)
-            .setPlaceholder("Select a script...").addOptions(options);
+          // Verifikasi script masih ada
+          const allScripts = await getScriptsByOwner(resolvedOwnerId);
+          const script = allScripts.find(s => s.id === scriptId);
+          if (!script) {
+            return interaction.editReply({
+              content: "❌ The script registered in this server no longer exists."
+            }).catch(() => {});
+          }
 
-          return interaction.followUp({
-            content: "Select a script to whitelist:",
-            components: [new ActionRowBuilder().addComponents(select)],
-            ephemeral: true
-          }).catch(() => {});
-        } catch {
+          const keys = readKeys();
+          const expiry = days === 0 ? null : new Date(Date.now() + days * 86400000).toISOString();
+          const cfg = readConfig()[interaction.guildId] || {};
+          const buyerRoleId = cfg.buyerRoles?.[scriptId] || cfg.buyerRole || null;
+
+          // ── Target: single user ──
+          if (targetUser) {
+            const existingKey = keys.find(k =>
+              String(k.userId) === String(targetUser.id) &&
+              k.scriptId === scriptId &&
+              !(k.expiry && new Date(k.expiry) < new Date())
+            );
+            if (existingKey) {
+              return interaction.editReply({
+                content: `❌ <@${targetUser.id}> already has access to **${script.name}**.`
+              }).catch(() => {});
+            }
+
+            const key = generateKey();
+            keys.push({
+              key, hwid: null,
+              userId: String(targetUser.id), username: targetUser.username,
+              scriptId, redeemedAt: new Date().toISOString(), expiry,
+              createdAt: new Date().toISOString(), createdBy: interaction.user.id
+            });
+            writeKeys(keys);
+
+            if (buyerRoleId) {
+              try {
+                const member = await interaction.guild.members.fetch(targetUser.id);
+                await member.roles.add(buyerRoleId);
+              } catch {}
+            }
+
+            return interaction.editReply({
+              content: `✅ <@${targetUser.id}> has been whitelisted for script **${script.name}**!\nPress the **Get Script** button on the panel to get their loader.`
+            }).catch(() => {});
+          }
+
+          // ── Target: role (whitelist semua member role) ──
+          if (targetRole) {
+            const role = await interaction.guild.roles.fetch(targetRole.id);
+            await interaction.guild.members.fetch();
+            const members = role.members.filter(m => !m.user.bot);
+            let addedCount = 0;
+            let skippedCount = 0;
+
+            for (const [, member] of members) {
+              const existingKey = keys.find(k =>
+                String(k.userId) === String(member.id) &&
+                k.scriptId === scriptId &&
+                !(k.expiry && new Date(k.expiry) < new Date())
+              );
+              if (existingKey) { skippedCount++; continue; }
+
+              const userKey = generateKey();
+              keys.push({
+                key: userKey, hwid: null,
+                userId: String(member.id), username: member.user.username,
+                scriptId, redeemedAt: new Date().toISOString(), expiry,
+                createdAt: new Date().toISOString(), createdBy: interaction.user.id
+              });
+              addedCount++;
+
+              if (buyerRoleId) {
+                try { await member.roles.add(buyerRoleId); } catch {}
+              }
+            }
+            writeKeys(keys);
+
+            const skippedNote = skippedCount > 0 ? ` (${skippedCount} already had access, skipped)` : "";
+            return interaction.editReply({
+              content: `✅ <@&${targetRole.id}> has been whitelisted for script **${script.name}**! (${addedCount} members whitelisted${skippedNote})\nMembers can press the **Get Script** button on the panel to get their loader.`
+            }).catch(() => {});
+          }
+
+        } catch (err) {
+          console.error("whitelist error:", err);
           return interaction.editReply({ content: "❌ Failed to whitelist." }).catch(() => {});
         }
       }
