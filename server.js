@@ -28,7 +28,7 @@ app.use(express.json({ limit: "15mb" }));
 
 app.use(
   session({
-    secret: process.env.SESSION_SECRET || "kinglua-secret-key-ganti-ini",
+    secret: process.env.SESSION_SECRET || "kingmor-secret-key-ganti-ini",
     resave: false,
     saveUninitialized: false,
     cookie: {
@@ -111,7 +111,7 @@ app.get("/login", (req, res) => {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>KingLua - Login</title>
+<title>Kingmor - Login</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
@@ -180,7 +180,7 @@ p { color: rgba(255,255,255,.55); font-size: 13px; margin-bottom: 30px; }
 <body>
 <div class="card">
   <div class="logo">👑</div>
-  <h1>KingLua</h1>
+  <h1>Kingmor</h1>
   <p>Login with Discord to protect your Lua scripts.</p>
   <a class="discord-btn" href="/auth/discord">
     <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
@@ -188,7 +188,7 @@ p { color: rgba(255,255,255,.55); font-size: 13px; margin-bottom: 30px; }
     </svg>
     Login with Discord
   </a>
-  <a class="invite-link" href="https://discord.com/oauth2/authorize?client_id=1545625902585487370&permissions=2415937584&integration_type=0&scope=bot" target="_blank" rel="noopener">
+  <a class="invite-link" href="https://discord.com/oauth2/authorize?client_id=1545625902585487370&permissions=2952873984&integration_type=0&scope=bot" target="_blank" rel="noopener">
     <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057c.002.022.015.043.032.056a19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/></svg>
     Invite Bot to Discord Server
   </a>
@@ -449,7 +449,7 @@ app.get("/api/loader/:id.lua", (req, res) => {
   const script = db.find((x) => x.id === scriptId);
 
   if (!script) {
-    return res.status(404).type("text/plain").send("-- KingLua: Script not found");
+    return res.status(404).type("text/plain").send("-- Kingmor: Script not found");
   }
 
   const botConfig = readBotConfig();
@@ -474,19 +474,19 @@ return
     if (isFreeMode) {
       if (!script.enabled) {
         return res.status(200).type("text/plain").set("Cache-Control", "no-store")
-          .send(kickPlayer("Script Disabled - KingLua"));
+          .send(kickPlayer("Script Disabled - Kingmor"));
       }
       const fp = path.join(SCRIPTS_DIR, script.filename);
       if (!fs.existsSync(fp)) {
         return res.status(404).type("text/plain").set("Cache-Control", "no-store")
-          .send(kickPlayer("Source Missing - KingLua"));
+          .send(kickPlayer("Source Missing - Kingmor"));
       }
       return res.status(200).type("text/plain").set("Cache-Control", "no-store")
         .send(fs.readFileSync(fp, "utf8"));
     }
 
     return res.status(200).type("text/plain").set("Cache-Control", "no-store")
-      .send(kickPlayer("No Key Provided - KingLua"));
+      .send(kickPlayer("No Key Provided - Kingmor"));
   }
 
   const loaderCode = `loadstring(game:HttpGet("${base}/api/loader/${scriptId}.lua"))()`;
@@ -496,7 +496,7 @@ return
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>KingLua • ${escapeHtml(script.name)}</title>
+<title>Kingmor • ${escapeHtml(script.name)}</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
@@ -608,7 +608,7 @@ h1 { font-size: 24px; font-weight: 850; color: #ffd700; margin-bottom: 4px; }
 <body>
 <div class="card">
   <div class="logo">👑</div>
-  <h1>KingLua</h1>
+  <h1>Kingmor</h1>
   <div class="subtitle">Lua Protection System</div>
   <div class="protected-badge">👑 SOURCE PROTECTED</div>
   <div class="script-name">
@@ -619,7 +619,7 @@ h1 { font-size: 24px; font-weight: 850; color: #ffd700; margin-bottom: 4px; }
     <code id="loaderCode">${escapeHtml(loaderCode)}</code>
   </div>
   <button class="copy-btn" onclick="copyLoader()">📋 Copy Loader</button>
-  <div class="footer-text">Protected by <strong>KingLua</strong> 👑</div>
+  <div class="footer-text">Protected by <strong>Kingmor</strong> 👑</div>
 </div>
 <script>
 const loader = ${JSON.stringify(loaderCode)};
@@ -750,7 +750,7 @@ app.get("/admin/dashboard", isAdmin, (req, res) => {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>KingLua Admin Dashboard</title>
+<title>Kingmor Admin Dashboard</title>
 <style>
 * { box-sizing: border-box; margin:0; padding:0; }
 body {
@@ -782,7 +782,7 @@ h1 { margin-bottom:20px; text-align:center; color: #ffd700; }
 </head>
 <body>
 <div class="card">
-  <h1>👑 KingLua Admin Dashboard</h1>
+  <h1>👑 Kingmor Admin Dashboard</h1>
   <div class="stat"><span class="label">Total Scripts</span><span class="value">${totalScripts}</span></div>
   <div class="stat"><span class="label">Total Users</span><span class="value">${totalUsers}</span></div>
   <div class="stat"><span class="label">Total Keys</span><span class="value">${totalKeys}</span></div>
@@ -842,7 +842,7 @@ app.get("/", requireAuth, (req, res) => {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>KingLua</title>
+<title>Kingmor</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { min-height: 100vh; font-family: Arial, Helvetica, sans-serif; color: white;
@@ -943,14 +943,14 @@ textarea { grid-column: 1 / -1; min-height: 180px; resize: vertical; }
   <div class="brand">
     <div class="logo">👑</div>
     <div>
-      <h1>KingLua</h1>
+      <h1>Kingmor</h1>
       <span>Lua Protection System</span>
     </div>
   </div>
   <div class="user-info">
     <img class="user-avatar" src="${escapeHtml(user.avatar)}" alt="avatar">
     <span class="user-name">${escapeHtml(user.username)}</span>
-    <a class="invite-btn" href="https://discord.com/oauth2/authorize?client_id=1545625902585487370&permissions=2415937584&integration_type=0&scope=bot" target="_blank" rel="noopener">
+    <a class="invite-btn" href="https://discord.com/oauth2/authorize?client_id=1545625902585487370&permissions=2952873984&integration_type=0&scope=bot" target="_blank" rel="noopener">
       Invite Bot
     </a>
     <a class="logout-btn" href="/logout">Logout</a>
@@ -1078,5 +1078,5 @@ app.get("/health", (req, res) => {
 // ==================== START ====================
 
 app.listen(PORT, () => {
-  console.log(`KingLua running on port ${PORT}`);
+  console.log(`Kingmor running on port ${PORT}`);
 });
