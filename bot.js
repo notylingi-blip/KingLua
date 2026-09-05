@@ -22,7 +22,7 @@ const axios = require("axios");
 
 const CONFIG = {
   token: process.env.BOT_TOKEN || "TOKEN_LO_DISINI",
-  clientId: process.env.DISCORD_CLIENT_ID || "1541101786855899177",
+  clientId: process.env.DISCORD_CLIENT_ID || "1545625902585487370",
   apiBase: process.env.API_BASE || "https://kinglua-production.up.railway.app",
   apiSecret: process.env.API_SECRET || "spidey-internal-secret"
 };
@@ -1350,5 +1350,11 @@ client.on("interactionCreate", async interaction => {
 process.on("unhandledRejection", (error) => {
   console.error("❌ Unhandled rejection:", error);
 });
+
+// Validasi token sebelum login
+if (!CONFIG.token || CONFIG.token === "TOKEN_LO_DISINI") {
+  console.error("❌ BOT_TOKEN environment variable is not set! Bot will not start.");
+  process.exit(1);
+}
 
 client.login(CONFIG.token);
