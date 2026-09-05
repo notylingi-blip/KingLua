@@ -41,7 +41,18 @@ app.use(
 const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID || "1545625902585487370";
 const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET || "GANTI_DENGAN_CLIENT_SECRET";
 const DISCORD_REDIRECT_URI = process.env.DISCORD_REDIRECT_URI || "http://localhost:3000/auth/discord/callback";
-const API_SECRET = process.env.API_SECRET || "spidey-internal-secret";
+
+// ==================== API SECRET (WAJIB DI-SET, TIDAK ADA FALLBACK) ====================
+// Ini yang dipakai bot.js buat komunikasi internal. Kalau env var ini nggak sama persis
+// di service web dan service bot, semua request internal (get scripts, freemode, delete)
+// bakal ke-403 diam-diam. Sengaja dibikin WAJIB (bukan fallback ke default) biar ketauan
+// dari log kalau lupa di-set, bukan gagal senyap kaya sebelumnya.
+const API_SECRET = process.env.API_SECRET;
+
+if (!API_SECRET) {
+  console.error("❌ FATAL: env var API_SECRET belum di-set! Set API_SECRET yang SAMA PERSIS di service web dan service bot.");
+  process.exit(1);
+}
 
 function readDB() {
   try { return JSON.parse(fs.readFileSync(DB_FILE, "utf8")); } catch { return []; }
@@ -85,6 +96,16 @@ function getBaseUrl(req) {
   return `${protocol}://${req.get("host")}`;
 }
 
+// Perbandingan secret pakai timing-safe compare biar nggak bocor lewat timing attack.
+function checkApiSecret(req) {
+  const provided = req.headers["x-api-secret"];
+  if (!provided || typeof provided !== "string") return false;
+  const a = Buffer.from(provided);
+  const b = Buffer.from(API_SECRET);
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
 function requireAuth(req, res, next) {
   if (!req.session || !req.session.user) {
     return res.redirect("/login");
@@ -95,6 +116,14 @@ function requireAuth(req, res, next) {
 function isAdmin(req, res, next) {
   if (!req.session || !req.session.user || req.session.user.id !== ADMIN_USER_ID) {
     return res.status(403).send("Forbidden");
+  }
+  next();
+}
+
+function requireInternalSecret(req, res, next) {
+  if (!checkApiSecret(req)) {
+    console.warn(`⚠️  Internal API rejected: bad/missing x-api-secret on ${req.method} ${req.originalUrl} from ${req.ip}`);
+    return res.status(403).json({ error: "Forbidden" });
   }
   next();
 }
@@ -280,18 +309,12 @@ app.get("/api/scripts", requireAuth, (req, res) => {
   );
 });
 
-app.get("/api/scripts/internal", (req, res) => {
-  const secret = req.headers["x-api-secret"];
-
-  if (secret !== API_SECRET) {
-    return res.status(403).json({ error: "Forbidden" });
-  }
-
+app.get("/api/scripts/internal", requireInternalSecret, (req, res) => {
   const db = readDB();
   const ownerId = req.query.ownerId;
 
   const filtered = ownerId
-    ? db.filter((script) => script.ownerId === ownerId)
+    ? db.filter((script) => String(script.ownerId) === String(ownerId))
     : db;
 
   res.json(
@@ -332,7 +355,7 @@ app.post("/api/scripts", requireAuth, (req, res) => {
     name: name.trim().slice(0, 100),
     filename,
     enabled: true,
-    ownerId: req.session.user.id,
+    ownerId: String(req.session.user.id),
     ownerUsername: req.session.user.username,
     guildId: guildId || null,
     createdAt: new Date().toISOString(),
@@ -341,6 +364,8 @@ app.post("/api/scripts", requireAuth, (req, res) => {
   const db = readDB();
   db.push(script);
   writeDB(db);
+
+  console.log(`✅ Script created: "${script.name}" (${script.id}) by owner ${script.ownerId}`);
 
   const base = getBaseUrl(req);
   const loaderPage = `${base}/api/loader/${id}.lua`;
@@ -404,13 +429,7 @@ app.delete("/api/scripts/:id", requireAuth, (req, res) => {
   res.json({ success: true });
 });
 
-app.delete("/api/scripts/internal/:id", (req, res) => {
-  const secret = req.headers["x-api-secret"];
-
-  if (secret !== API_SECRET) {
-    return res.status(403).json({ error: "Forbidden" });
-  }
-
+app.delete("/api/scripts/internal/:id", requireInternalSecret, (req, res) => {
   const requestOwnerId = req.headers["x-owner-id"];
 
   if (!requestOwnerId) {
@@ -426,7 +445,7 @@ app.delete("/api/scripts/internal/:id", (req, res) => {
 
   const script = db[index];
 
-  if (script.ownerId !== requestOwnerId) {
+  if (String(script.ownerId) !== String(requestOwnerId)) {
     return res.status(403).json({ error: "You do not own this script" });
   }
 
@@ -651,30 +670,18 @@ app.get("/files/loaders/:id.lua", (req, res) => {
 });
 
 // ==================== API FREEMODE ====================
-app.get("/api/freemode/:guildId/:scriptId", (req, res) => {
-  const secret = req.headers["x-api-secret"];
-  
-  if (secret !== API_SECRET) {
-    return res.status(403).json({ error: "Forbidden" });
-  }
-
+app.get("/api/freemode/:guildId/:scriptId", requireInternalSecret, (req, res) => {
   const { guildId, scriptId } = req.params;
   const botConfig = readBotConfig();
-  
+
   const isFreeMode = botConfig[guildId]?.freeMode?.[scriptId] === true;
-  
+
   res.json({ freeMode: isFreeMode });
 });
 
-app.post("/api/freemode/update", (req, res) => {
-  const secret = req.headers["x-api-secret"];
-  
-  if (secret !== API_SECRET) {
-    return res.status(403).json({ error: "Forbidden" });
-  }
-
+app.post("/api/freemode/update", requireInternalSecret, (req, res) => {
   const { guildId, scriptId, enabled } = req.body;
-  
+
   if (!guildId || !scriptId) {
     return res.status(400).json({ error: "guildId and scriptId are required" });
   }
@@ -690,7 +697,7 @@ app.post("/api/freemode/update", (req, res) => {
   }
 
   writeBotConfig(botConfig);
-  
+
   res.json({ success: true, freeMode: enabled });
 });
 
@@ -706,18 +713,12 @@ app.get("/api/admin/guilds", isAdmin, (req, res) => {
   res.json(guilds);
 });
 
-app.post("/api/admin/guilds/update", (req, res) => {
-  const secret = req.headers["x-api-secret"];
-  
-  if (secret !== API_SECRET) {
-    return res.status(403).json({ error: "Forbidden" });
-  }
-  
+app.post("/api/admin/guilds/update", requireInternalSecret, (req, res) => {
   const { guilds } = req.body;
   if (!guilds || !Array.isArray(guilds)) {
     return res.status(400).json({ error: "Invalid guilds data" });
   }
-  
+
   fs.writeFileSync(GUILDS_FILE, JSON.stringify(guilds, null, 2));
   res.json({ success: true });
 });
@@ -1079,4 +1080,5 @@ app.get("/health", (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Kingmor running on port ${PORT}`);
+  console.log(`API_SECRET loaded: ${API_SECRET ? "yes (" + API_SECRET.length + " chars)" : "NO — THIS WILL BREAK BOT INTEGRATION"}`);
 });
