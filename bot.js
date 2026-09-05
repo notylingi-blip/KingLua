@@ -33,7 +33,7 @@ if (!CONFIG.apiBase) missing.push("API_BASE");
 if (!CONFIG.apiSecret) missing.push("API_SECRET");
 
 if (missing.length > 0) {
-  console.error(`❌ FATAL: env var berikut belum di-set: ${missing.join(", ")}`);
+  console.error(`❌ FATAL: The following env vars are not set: ${missing.join(", ")}`);
   process.exit(1);
 }
 
@@ -81,11 +81,11 @@ const CACHE_TTL = 30000;
 const panelTempData = new Map();
 const buyerRoleTempData = new Map();
 const freeModeTempData = new Map();
-const webhookTempData = new Map(); // untuk /setwebhook
+const webhookTempData = new Map();
 
 function describeAxiosError(err) {
   if (err.response) return `HTTP ${err.response.status} — ${JSON.stringify(err.response.data)}`;
-  if (err.request) return `Tidak ada response dari server: ${err.code || err.message}`;
+  if (err.request) return `No response from server: ${err.code || err.message}`;
   return err.message;
 }
 
@@ -101,9 +101,9 @@ async function getScriptsByOwner(ownerId, { bypassCache = false } = {}) {
     scriptCache.set(cacheKey, { data, timestamp: Date.now() });
     return data;
   } catch (err) {
-    console.error(`❌ getScriptsByOwner(${ownerId}) gagal: ${describeAxiosError(err)}`);
+    console.error(`❌ getScriptsByOwner(${ownerId}) failed: ${describeAxiosError(err)}`);
     if (cached) {
-      console.warn(`⚠️  Pakai cache lama untuk ownerId ${ownerId}`);
+      console.warn(`⚠️  Using stale cache for ownerId ${ownerId}`);
       return cached.data;
     }
     return [];
@@ -212,10 +212,9 @@ const commands = [
     .setDescription("Check connection between bot and web dashboard (admin only)")
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
-  // ✅ NEW: /setwebhook
   new SlashCommandBuilder()
     .setName("setwebhook")
-    .setDescription("Set webhook untuk notifikasi saat script dijalankan")
+    .setDescription("Set a webhook URL to receive notifications when a script is executed")
     .addStringOption(o =>
       o.setName("url")
         .setDescription("Discord Webhook URL")
@@ -278,7 +277,7 @@ async function sendPanelEmbed(channel, title, description, scriptId, scriptName,
 client.on("interactionCreate", async interaction => {
   try {
     if (interaction.isButton() && isBlacklisted(interaction.user.id)) {
-      return interaction.reply({ content: "❌ You Have Been Blacklisted By The Owner", ephemeral: true }).catch(() => {});
+      return interaction.reply({ content: "❌ You have been blacklisted by the owner.", ephemeral: true }).catch(() => {});
     }
 
     // ==================== BUTTONS ====================
@@ -299,7 +298,7 @@ client.on("interactionCreate", async interaction => {
             });
             isFreeMode = freeModeRes.data.freeMode === true;
           } catch (err) {
-            console.error(`❌ freemode check gagal: ${describeAxiosError(err)}`);
+            console.error(`❌ freemode check failed: ${describeAxiosError(err)}`);
             const cfg = readConfig()[interaction.guildId] || {};
             isFreeMode = cfg.freeMode && cfg.freeMode[scriptId] === true;
           }
@@ -433,6 +432,20 @@ client.on("interactionCreate", async interaction => {
         const keyData = keys.find(k => k.key === keyInput);
 
         if (!keyData) return interaction.editReply({ content: "❌ Invalid key." }).catch(() => {});
+
+        // Block redeem if user already has a valid (non-expired) key for the same script
+        const existingKey = keys.find(k =>
+          k.key !== keyInput &&
+          String(k.userId) === String(interaction.user.id) &&
+          k.scriptId === keyData.scriptId &&
+          !(k.expiry && new Date(k.expiry) < new Date())
+        );
+        if (existingKey) {
+          return interaction.editReply({
+            content: "❌ You already have access to this script. You cannot redeem another key for it."
+          }).catch(() => {});
+        }
+
         if (keyData.userId && String(keyData.userId) !== String(interaction.user.id)) {
           return interaction.editReply({ content: "❌ This key is already used by another user." }).catch(() => {});
         }
@@ -474,7 +487,7 @@ client.on("interactionCreate", async interaction => {
           clearCache(interaction.user.id);
           return interaction.editReply({ content: "✅ Script and all its keys have been permanently deleted!" }).catch(() => {});
         } catch (err) {
-          console.error(`❌ deletescript gagal: ${describeAxiosError(err)}`);
+          console.error(`❌ deletescript failed: ${describeAxiosError(err)}`);
           return interaction.editReply({ content: "❌ Failed to delete script." }).catch(() => {});
         }
       }
@@ -504,7 +517,7 @@ client.on("interactionCreate", async interaction => {
               { headers: internalHeaders, timeout: 8000 }
             );
           } catch (err) {
-            console.error(`❌ freemode/update gagal: ${describeAxiosError(err)}`);
+            console.error(`❌ freemode/update failed: ${describeAxiosError(err)}`);
           }
 
           return interaction.editReply({
@@ -581,7 +594,6 @@ client.on("interactionCreate", async interaction => {
         }
       }
 
-      // ✅ NEW: setwebhook select (jika user punya >1 script)
       if (interaction.customId === "setwebhook_select") {
         await interaction.deferReply({ ephemeral: true }).catch(() => {});
         try {
@@ -600,10 +612,10 @@ client.on("interactionCreate", async interaction => {
           );
 
           return interaction.editReply({
-            content: `✅ Webhook berhasil diset untuk script **${selectedScript.name}**!\nSetiap kali script dijalankan, kamu akan dapat notifikasi di channel webhook tersebut.`
+            content: `✅ Webhook set for script **${selectedScript.name}**!\nYou will receive a notification every time the script is executed.`
           }).catch(() => {});
         } catch (err) {
-          console.error(`❌ setwebhook_select gagal: ${describeAxiosError(err)}`);
+          console.error(`❌ setwebhook_select failed: ${describeAxiosError(err)}`);
           return interaction.editReply({ content: "❌ Failed to set webhook." }).catch(() => {});
         }
       }
@@ -643,9 +655,8 @@ client.on("interactionCreate", async interaction => {
               } catch {}
             }
 
-            // ✅ FIX: tidak ada loader page URL — hanya pesan whitelist
             return interaction.editReply({
-              content: `✅ <@${targetId}> telah berhasil di-whitelist untuk script **${owned.name}**!\nSilakan tekan tombol **Get Script** di panel untuk mendapatkan loader.`
+              content: `✅ <@${targetId}> has been whitelisted for script **${owned.name}**!\nPress the **Get Script** button on the panel to get your loader.`
             }).catch(() => {});
           }
 
@@ -669,9 +680,8 @@ client.on("interactionCreate", async interaction => {
             }
             writeKeys(keys);
 
-            // ✅ FIX: tidak ada loader page URL
             return interaction.editReply({
-              content: `✅ <@&${targetId}> telah berhasil di-whitelist untuk script **${owned.name}**! (${addedCount} members)\nSilakan tekan tombol **Get Script** di panel untuk mendapatkan loader.`
+              content: `✅ <@&${targetId}> has been whitelisted for script **${owned.name}**! (${addedCount} members)\nMembers can press the **Get Script** button on the panel to get their loader.`
             }).catch(() => {});
           }
         } catch {
@@ -739,16 +749,16 @@ client.on("interactionCreate", async interaction => {
           await axios.get(`${CONFIG.apiBase}/health`, { timeout: 8000 });
           const ms = Date.now() - start;
 
-          let secretStatus = "❓ Belum dicek";
+          let secretStatus = "❓ Not checked";
           try {
             await axios.get(`${CONFIG.apiBase}/api/scripts/internal`, {
               headers: internalHeaders, params: { ownerId: interaction.user.id }, timeout: 8000
             });
-            secretStatus = "✅ API_SECRET cocok";
+            secretStatus = "✅ API_SECRET matches";
           } catch (err) {
             secretStatus = err.response?.status === 403
-              ? "❌ API_SECRET TIDAK COCOK antara bot dan web"
-              : `❌ Gagal cek: ${describeAxiosError(err)}`;
+              ? "❌ API_SECRET MISMATCH between bot and web"
+              : `❌ Check failed: ${describeAxiosError(err)}`;
           }
 
           return interaction.editReply({
@@ -756,7 +766,7 @@ client.on("interactionCreate", async interaction => {
           }).catch(() => {});
         } catch (err) {
           return interaction.editReply({
-            content: `🔗 **Connection Check**\n\n• API_BASE: \`${CONFIG.apiBase}\`\n• Health check: ❌ GAGAL — ${describeAxiosError(err)}`
+            content: `🔗 **Connection Check**\n\n• API_BASE: \`${CONFIG.apiBase}\`\n• Health check: ❌ FAILED — ${describeAxiosError(err)}`
           }).catch(() => {});
         }
       }
@@ -810,7 +820,7 @@ client.on("interactionCreate", async interaction => {
 
       if (commandName === "setuppanel") {
         if (!hasPermission(interaction.member, interaction.guildId)) {
-          return interaction.reply({ content: "❌ No Permission.", ephemeral: true }).catch(() => {});
+          return interaction.reply({ content: "❌ No permission.", ephemeral: true }).catch(() => {});
         }
         await interaction.deferReply({ ephemeral: true }).catch(() => {});
         try {
@@ -844,7 +854,7 @@ client.on("interactionCreate", async interaction => {
 
       if (commandName === "deletescript") {
         if (!hasPermission(interaction.member, interaction.guildId)) {
-          return interaction.reply({ content: "❌ No Permission.", ephemeral: true }).catch(() => {});
+          return interaction.reply({ content: "❌ No permission.", ephemeral: true }).catch(() => {});
         }
         await interaction.deferReply({ ephemeral: true }).catch(() => {});
         try {
@@ -868,16 +878,16 @@ client.on("interactionCreate", async interaction => {
 
       if (commandName === "freemode") {
         if (!hasPermission(interaction.member, interaction.guildId)) {
-          return interaction.reply({ content: "❌ No Permission.", ephemeral: true }).catch(() => {});
+          return interaction.reply({ content: "❌ No permission.", ephemeral: true }).catch(() => {});
         }
         await interaction.deferReply({ ephemeral: true }).catch(() => {});
         try {
           const options = [
             new StringSelectMenuOptionBuilder()
-              .setLabel("Enable Free Mode").setDescription("Allow all users to use the script without key")
+              .setLabel("Enable Free Mode").setDescription("Allow all users to use the script without a key")
               .setValue("enable").setEmoji("✅"),
             new StringSelectMenuOptionBuilder()
-              .setLabel("Disable Free Mode").setDescription("Require key to use the script")
+              .setLabel("Disable Free Mode").setDescription("Require a key to use the script")
               .setValue("disable").setEmoji("❌"),
           ];
           const select = new StringSelectMenuBuilder()
@@ -888,28 +898,26 @@ client.on("interactionCreate", async interaction => {
             components: [new ActionRowBuilder().addComponents(select)]
           }).catch(() => {});
         } catch {
-          return interaction.editReply({ content: "❌ Failed to open freemode menu." }).catch(() => {});
+          return interaction.editReply({ content: "❌ Failed to open free mode menu." }).catch(() => {});
         }
       }
 
-      // ✅ NEW: /setwebhook
       if (commandName === "setwebhook") {
         if (!hasPermission(interaction.member, interaction.guildId)) {
-          return interaction.reply({ content: "❌ No Permission.", ephemeral: true }).catch(() => {});
+          return interaction.reply({ content: "❌ No permission.", ephemeral: true }).catch(() => {});
         }
         await interaction.deferReply({ ephemeral: true }).catch(() => {});
         try {
           const url = interaction.options.getString("url");
 
-          // Validasi format Discord webhook URL
           if (!url.startsWith("https://discord.com/api/webhooks/") && !url.startsWith("https://discordapp.com/api/webhooks/")) {
             return interaction.editReply({
-              content: "❌ URL tidak valid! Harus berupa Discord webhook URL.\nContoh: `https://discord.com/api/webhooks/123456/token...`"
+              content: "❌ Invalid URL! Must be a Discord webhook URL.\nExample: `https://discord.com/api/webhooks/123456/token...`"
             }).catch(() => {});
           }
 
           const myScripts = await getScriptsByOwner(interaction.user.id);
-          if (myScripts.length === 0) return interaction.editReply({ content: "❌ Kamu belum punya script." }).catch(() => {});
+          if (myScripts.length === 0) return interaction.editReply({ content: "❌ You don't have any scripts yet." }).catch(() => {});
 
           if (myScripts.length === 1) {
             await axios.post(`${CONFIG.apiBase}/api/webhook/set`,
@@ -917,11 +925,10 @@ client.on("interactionCreate", async interaction => {
               { headers: internalHeaders, timeout: 8000 }
             );
             return interaction.editReply({
-              content: `✅ Webhook berhasil diset untuk script **${myScripts[0].name}**!\nSetiap kali script dijalankan, notifikasi akan dikirim ke webhook tersebut.`
+              content: `✅ Webhook set for script **${myScripts[0].name}**!\nYou will receive a notification every time the script is executed.`
             }).catch(() => {});
           }
 
-          // Lebih dari 1 script — tampilkan select menu
           webhookTempData.set(interaction.user.id, { url });
           setTimeout(() => webhookTempData.delete(interaction.user.id), 5 * 60 * 1000);
 
@@ -931,21 +938,21 @@ client.on("interactionCreate", async interaction => {
               .setValue(s.id)
           );
           const select = new StringSelectMenuBuilder()
-            .setCustomId("setwebhook_select").setPlaceholder("Pilih script...").addOptions(options);
+            .setCustomId("setwebhook_select").setPlaceholder("Select a script...").addOptions(options);
 
           return interaction.editReply({
-            content: "Pilih script yang ingin kamu set webhook-nya:",
+            content: "Select the script to attach this webhook to:",
             components: [new ActionRowBuilder().addComponents(select)]
           }).catch(() => {});
         } catch (err) {
-          console.error(`❌ setwebhook gagal: ${describeAxiosError(err)}`);
+          console.error(`❌ setwebhook failed: ${describeAxiosError(err)}`);
           return interaction.editReply({ content: "❌ Failed to set webhook." }).catch(() => {});
         }
       }
 
       if (commandName === "whitelist") {
         if (!hasPermission(interaction.member, interaction.guildId)) {
-          return interaction.reply({ content: "❌ No Permission.", ephemeral: true }).catch(() => {});
+          return interaction.reply({ content: "❌ No permission.", ephemeral: true }).catch(() => {});
         }
         await interaction.deferReply({ ephemeral: false }).catch(() => {});
         try {
@@ -984,9 +991,8 @@ client.on("interactionCreate", async interaction => {
                 } catch {}
               }
 
-              // ✅ FIX: tidak ada loader page URL
               return interaction.editReply({
-                content: `✅ <@${targetUser.id}> telah berhasil di-whitelist untuk script **${myScripts[0].name}**!\nSilakan tekan tombol **Get Script** di panel untuk mendapatkan loader.`
+                content: `✅ <@${targetUser.id}> has been whitelisted for script **${myScripts[0].name}**!\nPress the **Get Script** button on the panel to get your loader.`
               }).catch(() => {});
             }
 
@@ -1009,9 +1015,8 @@ client.on("interactionCreate", async interaction => {
               }
               writeKeys(keys);
 
-              // ✅ FIX: tidak ada loader page URL
               return interaction.editReply({
-                content: `✅ <@&${targetRole.id}> telah berhasil di-whitelist untuk script **${myScripts[0].name}**! (${addedCount} members)\nSilakan tekan tombol **Get Script** di panel untuk mendapatkan loader.`
+                content: `✅ <@&${targetRole.id}> has been whitelisted for script **${myScripts[0].name}**! (${addedCount} members)\nMembers can press the **Get Script** button on the panel to get their loader.`
               }).catch(() => {});
             }
           }
@@ -1036,12 +1041,12 @@ client.on("interactionCreate", async interaction => {
 
       if (commandName === "blacklist") {
         if (!hasPermission(interaction.member, interaction.guildId)) {
-          return interaction.reply({ content: "❌ No Permission.", ephemeral: true }).catch(() => {});
+          return interaction.reply({ content: "❌ No permission.", ephemeral: true }).catch(() => {});
         }
         await interaction.deferReply({ ephemeral: false }).catch(() => {});
         try {
           const targetUser = interaction.options.getUser("user");
-          const reason = interaction.options.getString("reason") || "No reason";
+          const reason = interaction.options.getString("reason") || "No reason provided";
           const bl = readBlacklist();
           if (bl.some(b => String(b.userId) === String(targetUser.id))) {
             return interaction.editReply({ content: "❌ This user is already blacklisted!" }).catch(() => {});
@@ -1053,7 +1058,7 @@ client.on("interactionCreate", async interaction => {
           writeBlacklist(bl);
           writeKeys(readKeys().filter(k => String(k.userId) !== String(targetUser.id)));
           return interaction.editReply({
-            content: `🚫 **<@${targetUser.id}> has been Blacklisted!**\nAll script access has been revoked.`
+            content: `🚫 **<@${targetUser.id}> has been blacklisted!**\nAll script access has been revoked.`
           }).catch(() => {});
         } catch {
           return interaction.editReply({ content: "❌ Failed to blacklist user." }).catch(() => {});
@@ -1062,7 +1067,7 @@ client.on("interactionCreate", async interaction => {
 
       if (commandName === "unblacklist") {
         if (!hasPermission(interaction.member, interaction.guildId)) {
-          return interaction.reply({ content: "❌ No Permission.", ephemeral: true }).catch(() => {});
+          return interaction.reply({ content: "❌ No permission.", ephemeral: true }).catch(() => {});
         }
         await interaction.deferReply({ ephemeral: false }).catch(() => {});
         try {
@@ -1072,7 +1077,7 @@ client.on("interactionCreate", async interaction => {
           if (index === -1) return interaction.editReply({ content: "❌ User is not blacklisted." }).catch(() => {});
           bl.splice(index, 1);
           writeBlacklist(bl);
-          return interaction.editReply({ content: `✅ **<@${targetUser.id}> has been Unblacklisted!**` }).catch(() => {});
+          return interaction.editReply({ content: `✅ **<@${targetUser.id}> has been unblacklisted!**` }).catch(() => {});
         } catch {
           return interaction.editReply({ content: "❌ Failed to unblacklist user." }).catch(() => {});
         }
@@ -1080,7 +1085,7 @@ client.on("interactionCreate", async interaction => {
 
       if (commandName === "genkey") {
         if (!hasPermission(interaction.member, interaction.guildId)) {
-          return interaction.reply({ content: "❌ No Permission.", ephemeral: true }).catch(() => {});
+          return interaction.reply({ content: "❌ No permission.", ephemeral: true }).catch(() => {});
         }
         await interaction.deferReply({ ephemeral: true }).catch(() => {});
         try {
@@ -1115,7 +1120,7 @@ client.on("interactionCreate", async interaction => {
             .setPlaceholder("Select a script...").addOptions(options);
 
           return interaction.editReply({
-            content: `Select a script to generate ${amount} key(s):`,
+            content: `Select a script to generate ${amount} key(s) for:`,
             components: [new ActionRowBuilder().addComponents(select)]
           }).catch(() => {});
         } catch {
@@ -1125,7 +1130,7 @@ client.on("interactionCreate", async interaction => {
 
       if (commandName === "revoke") {
         if (!hasPermission(interaction.member, interaction.guildId)) {
-          return interaction.reply({ content: "❌ No Permission.", ephemeral: true }).catch(() => {});
+          return interaction.reply({ content: "❌ No permission.", ephemeral: true }).catch(() => {});
         }
         await interaction.deferReply({ ephemeral: true }).catch(() => {});
         try {
@@ -1155,7 +1160,7 @@ client.on("interactionCreate", async interaction => {
 
       if (commandName === "resethwid") {
         if (!hasPermission(interaction.member, interaction.guildId)) {
-          return interaction.reply({ content: "❌ No Permission.", ephemeral: true }).catch(() => {});
+          return interaction.reply({ content: "❌ No permission.", ephemeral: true }).catch(() => {});
         }
         await interaction.deferReply({ ephemeral: true }).catch(() => {});
         try {
@@ -1183,7 +1188,7 @@ client.on("interactionCreate", async interaction => {
 
       if (commandName === "listkeys") {
         if (!hasPermission(interaction.member, interaction.guildId)) {
-          return interaction.reply({ content: "❌ No Permission.", ephemeral: true }).catch(() => {});
+          return interaction.reply({ content: "❌ No permission.", ephemeral: true }).catch(() => {});
         }
         await interaction.deferReply({ ephemeral: true }).catch(() => {});
         try {
@@ -1220,7 +1225,7 @@ client.on("interactionCreate", async interaction => {
 
       if (commandName === "userinfo") {
         if (!hasPermission(interaction.member, interaction.guildId)) {
-          return interaction.reply({ content: "❌ No Permission.", ephemeral: true }).catch(() => {});
+          return interaction.reply({ content: "❌ No permission.", ephemeral: true }).catch(() => {});
         }
         await interaction.deferReply({ ephemeral: true }).catch(() => {});
         try {
