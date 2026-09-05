@@ -505,41 +505,19 @@ return
         .send(fs.readFileSync(fp, "utf8"));
     }
 
-    // Key mode — validasi HWID
-    const providedHwid = (req.headers["x-hwid"] || "").trim();
-    if (!providedHwid) {
+    // Key mode — validasi ?key= query param
+    const providedKey = (req.query.key || "").toLowerCase().trim();
+    if (!providedKey) {
       return res.status(200).type("text/plain").set("Cache-Control", "no-store")
         .send(kickPlayer("No Key Provided - Kingmor"));
     }
 
     const allKeys = readKeys();
-    const keyData = allKeys.find(k => k.hwid === providedHwid && k.scriptId === scriptId);
+    const keyData = allKeys.find(k => k.key === providedKey && k.scriptId === scriptId);
 
     if (!keyData) {
-      // HWID belum terdaftar — cek apakah ada key milik user ini yang belum bind HWID
-      const unboundKey = allKeys.find(k => k.scriptId === scriptId && k.userId && !k.hwid);
-      if (unboundKey) {
-        // Auto-bind HWID ke key ini
-        unboundKey.hwid = providedHwid;
-        const fs2 = require("fs");
-        fs2.writeFileSync(KEYS_FILE, JSON.stringify(allKeys, null, 2));
-      } else {
-        return res.status(200).type("text/plain").set("Cache-Control", "no-store")
-          .send(kickPlayer("Invalid Key - Kingmor"));
-      }
-      // Lanjut serve dengan key yang baru di-bind
-      const keyDataBound = unboundKey;
-      if (keyDataBound.expiry && new Date(keyDataBound.expiry) < new Date()) {
-        return res.status(200).type("text/plain").set("Cache-Control", "no-store")
-          .send(kickPlayer("Key Expired - Kingmor"));
-      }
-      const fp2 = path.join(SCRIPTS_DIR, script.filename);
-      if (!fs.existsSync(fp2)) {
-        return res.status(200).type("text/plain").set("Cache-Control", "no-store")
-          .send(kickPlayer("Source Missing - Kingmor"));
-      }
       return res.status(200).type("text/plain").set("Cache-Control", "no-store")
-        .send(fs.readFileSync(fp2, "utf8"));
+        .send(kickPlayer("Invalid Key - Kingmor"));
     }
 
     if (keyData.expiry && new Date(keyData.expiry) < new Date()) {
@@ -574,7 +552,7 @@ return
 
   // Format loader luarmor: script_key di atas, loadstring di bawah
   const loaderDisplay = userScriptKey
-    ? `local script_key = "${userScriptKey}"\nloadstring(game:HttpGet("${base}/api/loader/${scriptId}.lua"))()`
+    ? `script_key = "${userScriptKey}"\nloadstring(game:HttpGet("${base}/api/loader/${scriptId}.lua?key="..script_key))()`
     : loaderCode;
 
   const keyBlockHtml = (!isFreeMode && userScriptKey) ? `` : "";
