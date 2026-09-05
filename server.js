@@ -490,25 +490,94 @@ return
   const isRobloxRequest = userAgent.includes("Roblox") || userAgent.includes("Lua") || userAgent.includes("Synapse") || userAgent.includes("Krnl") || userAgent.includes("Fluxus") || userAgent.includes("Hydrogen") || userAgent.includes("ScriptWare") || userAgent.includes("Electron");
 
   if (isRobloxRequest) {
+    if (!script.enabled) {
+      return res.status(200).type("text/plain").set("Cache-Control", "no-store")
+        .send(kickPlayer("Script Disabled - Kingmor"));
+    }
+
     if (isFreeMode) {
-      if (!script.enabled) {
-        return res.status(200).type("text/plain").set("Cache-Control", "no-store")
-          .send(kickPlayer("Script Disabled - Kingmor"));
-      }
       const fp = path.join(SCRIPTS_DIR, script.filename);
       if (!fs.existsSync(fp)) {
-        return res.status(404).type("text/plain").set("Cache-Control", "no-store")
+        return res.status(200).type("text/plain").set("Cache-Control", "no-store")
           .send(kickPlayer("Source Missing - Kingmor"));
       }
       return res.status(200).type("text/plain").set("Cache-Control", "no-store")
         .send(fs.readFileSync(fp, "utf8"));
     }
 
+    // Key mode — validasi HWID
+    const providedHwid = (req.headers["x-hwid"] || "").trim();
+    if (!providedHwid) {
+      return res.status(200).type("text/plain").set("Cache-Control", "no-store")
+        .send(kickPlayer("No Key Provided - Kingmor"));
+    }
+
+    const allKeys = readKeys();
+    const keyData = allKeys.find(k => k.hwid === providedHwid && k.scriptId === scriptId);
+
+    if (!keyData) {
+      // HWID belum terdaftar — cek apakah ada key milik user ini yang belum bind HWID
+      const unboundKey = allKeys.find(k => k.scriptId === scriptId && k.userId && !k.hwid);
+      if (unboundKey) {
+        // Auto-bind HWID ke key ini
+        unboundKey.hwid = providedHwid;
+        const fs2 = require("fs");
+        fs2.writeFileSync(KEYS_FILE, JSON.stringify(allKeys, null, 2));
+      } else {
+        return res.status(200).type("text/plain").set("Cache-Control", "no-store")
+          .send(kickPlayer("Invalid Key - Kingmor"));
+      }
+      // Lanjut serve dengan key yang baru di-bind
+      const keyDataBound = unboundKey;
+      if (keyDataBound.expiry && new Date(keyDataBound.expiry) < new Date()) {
+        return res.status(200).type("text/plain").set("Cache-Control", "no-store")
+          .send(kickPlayer("Key Expired - Kingmor"));
+      }
+      const fp2 = path.join(SCRIPTS_DIR, script.filename);
+      if (!fs.existsSync(fp2)) {
+        return res.status(200).type("text/plain").set("Cache-Control", "no-store")
+          .send(kickPlayer("Source Missing - Kingmor"));
+      }
+      return res.status(200).type("text/plain").set("Cache-Control", "no-store")
+        .send(fs.readFileSync(fp2, "utf8"));
+    }
+
+    if (keyData.expiry && new Date(keyData.expiry) < new Date()) {
+      return res.status(200).type("text/plain").set("Cache-Control", "no-store")
+        .send(kickPlayer("Key Expired - Kingmor"));
+    }
+
+    const fp = path.join(SCRIPTS_DIR, script.filename);
+    if (!fs.existsSync(fp)) {
+      return res.status(200).type("text/plain").set("Cache-Control", "no-store")
+        .send(kickPlayer("Source Missing - Kingmor"));
+    }
     return res.status(200).type("text/plain").set("Cache-Control", "no-store")
-      .send(kickPlayer("No Key Provided - Kingmor"));
+      .send(fs.readFileSync(fp, "utf8"));
   }
 
   const loaderCode = `loadstring(game:HttpGet("${base}/api/loader/${scriptId}.lua"))()`;
+
+  // Lookup key milik user (dari ?uid= query param yang dikirim bot)
+  const uid = req.query.uid || null;
+  let userScriptKey = null;
+  if (!isFreeMode && uid) {
+    const allKeys = readKeys();
+    const userKey = allKeys.find(k => String(k.userId) === String(uid) && k.scriptId === scriptId);
+    if (userKey) {
+      const isExpired = userKey.expiry && new Date(userKey.expiry) < new Date();
+      if (!isExpired) {
+        userScriptKey = userKey.key;
+      }
+    }
+  }
+
+  // Format loader luarmor: script_key di atas, loadstring di bawah
+  const loaderDisplay = userScriptKey
+    ? `local script_key = "${userScriptKey}"\nloadstring(game:HttpGet("${base}/api/loader/${scriptId}.lua"))()`
+    : loaderCode;
+
+  const keyBlockHtml = (!isFreeMode && userScriptKey) ? `` : "";
 
   return res.status(200).send(`<!DOCTYPE html>
 <html lang="en">
@@ -635,13 +704,13 @@ h1 { font-size: 24px; font-weight: 850; color: #ffd700; margin-bottom: 4px; }
   </div>
   <div class="loader-label">📜 LOADER</div>
   <div class="code-block">
-    <code id="loaderCode">${escapeHtml(loaderCode)}</code>
+    <code id="loaderCode">${escapeHtml(loaderDisplay)}</code>
   </div>
   <button class="copy-btn" onclick="copyLoader()">📋 Copy Loader</button>
   <div class="footer-text">Protected by <strong>Kingmor</strong> 👑</div>
 </div>
 <script>
-const loader = ${JSON.stringify(loaderCode)};
+const loader = ${JSON.stringify(loaderDisplay)};
 async function copyLoader() {
   const btn = document.querySelector(".copy-btn");
   try {
