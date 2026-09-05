@@ -1,7 +1,7 @@
 {
-  "name": "kinglua",
+  "name": "kingmor",
   "version": "1.0.0",
-  "description": "KingLua Protection System",
+  "description": "Kingmor Protection System",
   "main": "server.js",
   "scripts": {
     "start": "concurrently \"node server.js\" \"node bot.js\""
