@@ -369,9 +369,9 @@ client.on("interactionCreate", async interaction => {
           }
 
           const loaderPage = `${CONFIG.apiBase}/api/loader/${validKey.scriptId}.lua?uid=${interaction.user.id}`;
-          const loaderCode = `local script_key = "${validKey.key}"\nloadstring(game:HttpGet("${CONFIG.apiBase}/api/loader/${validKey.scriptId}.lua"))()`;
+          const loaderCode = `script_key = "${validKey.key}"\nloadstring(game:HttpGet("${CONFIG.apiBase}/api/loader/${validKey.scriptId}.lua?key="..script_key))()`;
           return interaction.editReply({
-            content: `\`\`\`lua\n${loaderCode}\n\`\`\`\n🔗 **Loader Page:** ${loaderPage}`
+            content: `\`\`\`lua\n${loaderCode}\n\`\`\``
           }).catch(() => {});
         } catch (err) {
           console.error("Get script error:", err);
