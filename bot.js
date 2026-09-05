@@ -23,7 +23,7 @@ const axios = require("axios");
 const CONFIG = {
   token: process.env.BOT_TOKEN || "TOKEN_LO_DISINI",
   clientId: process.env.DISCORD_CLIENT_ID || "1545625902585487370",
-  apiBase: process.env.API_BASE || "https://kinglua-production.up.railway.app",
+  apiBase: process.env.API_BASE || "https://kingmor-production.up.railway.app",
   apiSecret: process.env.API_SECRET || "spidey-internal-secret"
 };
 
@@ -181,7 +181,7 @@ const commands = [
   
   new SlashCommandBuilder()
     .setName("deletescript")
-    .setDescription("Delete your script from KingLua"),
+    .setDescription("Delete your script from Kingmor"),
   
   new SlashCommandBuilder()
     .setName("freemode")
@@ -226,7 +226,7 @@ async function sendPanelEmbed(channel, title, description, scriptId, scriptName,
     .setTitle(title)
     .setDescription(description)
     .setColor(0xFFD700)
-    .setFooter({ text: `KingLua 👑 • ${scriptName}` })
+    .setFooter({ text: `Kingmor 👑 • ${scriptName}` })
     .setTimestamp();
 
   const row1 = new ActionRowBuilder().addComponents(
@@ -1323,7 +1323,7 @@ client.on("interactionCreate", async interaction => {
               { name: "👑 Buyer Role", value: hasBuyerRole ? "✅ Has" : "❌ Doesn't have", inline: true },
               { name: "🔑 Key Count", value: String(userKeys.length), inline: true }
             )
-            .setFooter({ text: "KingLua 👑" })
+            .setFooter({ text: "Kingmor 👑" })
             .setTimestamp();
 
           return interaction.editReply({ embeds: [embed] }).catch(() => {});
